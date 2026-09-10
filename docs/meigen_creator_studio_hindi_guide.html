@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MeiGen Creator Studio — Architecture & Review Guide (Hindi / Hinglish)</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Calibri, Arial, sans-serif;
+    color: #1A202C;
+    background-color: #FFFFFF;
+    line-height: 1.6;
+    margin: 40px auto;
+    max-width: 900px;
+    padding: 0 20px;
+  }
+  h1 {
+    color: #0B0F19;
+    font-size: 26pt;
+    border-bottom: 2px solid #00F2FE;
+    padding-bottom: 8px;
+    margin-top: 30px;
+  }
+  h2 {
+    color: #0F172A;
+    font-size: 18pt;
+    border-bottom: 1px solid #E2E8F0;
+    padding-bottom: 6px;
+    margin-top: 28px;
+  }
+  h3 {
+    color: #1E293B;
+    font-size: 14pt;
+    margin-top: 20px;
+  }
+  h4 {
+    color: #334155;
+    font-size: 12pt;
+    margin-top: 16px;
+  }
+  p, li {
+    font-size: 11pt;
+    color: #2D3748;
+  }
+  .callout {
+    background-color: #F8FAFC;
+    border-left: 4px solid #00F2FE;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout p {
+    margin: 0;
+    color: #1E293B;
+    font-weight: 500;
+  }
+  .word-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+    font-size: 10.5pt;
+  }
+  .word-table th {
+    background-color: #0F172A;
+    color: #FFFFFF;
+    font-weight: 600;
+    text-align: left;
+    padding: 10px 14px;
+    border: 1px solid #0F172A;
+  }
+  .word-table td {
+    padding: 9px 14px;
+    border: 1px solid #CBD5E1;
+    vertical-align: top;
+  }
+  .word-table tr:nth-child(even) {
+    background-color: #F8FAFC;
+  }
+  .code-block {
+    background-color: #0B0F19;
+    color: #F1F5F9;
+    padding: 14px 18px;
+    border-radius: 6px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 10pt;
+    overflow-x: auto;
+    border: 1px solid #1E293B;
+  }
+  code {
+    background-color: #EDF2F7;
+    color: #C53030;
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 10pt;
+  }
+  .code-block code {
+    background-color: transparent;
+    color: #F1F5F9;
+    padding: 0;
+  }
+  .divider {
+    border: 0;
+    height: 1px;
+    background: #E2E8F0;
+    margin: 30px 0;
+  }
+  ol, ul {
+    padding-left: 24px;
+  }
+  li {
+    margin-bottom: 6px;
+  }
+</style>
+</head>
+<body>
+<h1>MeiGen Creator Studio — Complete Architecture & Review Guide (Aasan Hindi / Hinglish)</h1>
+<div class="callout"><p><strong>Is Document Ka Maqsad (Goal):</strong></p></div>
+<div class="callout"><p>MeiGen Creator Studio ka pura business model, app ke features, backend system, pricing formula, aur security kaise kaam karegi — ye sab aasan aur simple bhasha (medium-level Hinglish) mein likha gaya hai. Iska maqsad ye hai ki team aur review karne wale sabhi log ise bina kisi technical dictionary ya Google search ke aasaani se samajh sakein.</p></div>
+<div class="callout"><p><strong>Tech Stack:</strong> Flutter Mobile App (iOS/Android) • Next.js 15 Web Platform • FastAPI (Python) • Supabase (PostgreSQL, Auth, Storage, Realtime, pgvector) • Serverless GPU Workers.</p></div>
+<hr class="divider">
+<h2>1. Main Idea (Platform Ka Pura Concept)</h2>
+<p>Ye platform ek <strong>AI Image & Video Creation App + Creator Marketplace</strong> hai jo <strong>MeiGen.ai</strong> jaisi top apps se inspired hai, aur ye <strong>Flutter Mobile App (iOS/Android)</strong> aur <strong>Next.js 15 Web</strong> dono par ek sath chalega.</p>
+<p>Abhi market mein aane wali purani AI apps mein 2 sabse badi galtiyan hoti hain:</p>
+<ol class="ordered-list">
+  <li><strong>Pehle hi paise maangna:</strong> User jaise hi prompt likhta hai, app pehle hi payment maang leti hai. Is wajah se <strong>85% users bina kuch banaye app band karke uninstall kar dete hain</strong>.</li>
+  <li><strong>Prompts Ki Chori (No Protection):</strong> Agar koi creator bohot dimaag laga kar ek zabardast studio prompt banata hai, toh dusre log usse aasani se <strong>copy ya chori kar lete hain</strong>. Creator ko uski mehnat ka ek rupaya bhi nahi milta.</li>
+</ol>
+<p>Hamari app is problem ko <strong>"Creator Flywheel" (Creator Ko Sath Lekar Badhne Ka Model)</strong> se solve karti hai:</p>
+<ul class="unordered-list">
+  <li><strong>Image Banana Bilkul Free:</strong> Koi bhi user app ke andar bina kisi rok-tok ke images bana sakta hai. Saari photos uski personal "Cloud Library" (Supabase cloud ke andar) mein hamesha safe save rahengi. Iska shuru mein koi charge nahi hai.</li>
+  <li><strong>Gallery Mein Download Par Paywall (Rule 1):</strong> Agar user ko original 4K photo apne phone ki gallery mein save karni hai, tab use <strong>flat 2 Credits ($0.20 ya lagbhag ₹17)</strong> dene honge. Ek bar unlock hone ke baad re-download hamesha <strong>100% Free</strong> rahega.</li>
+  <li><strong>Creator Ki Kamayi (Rule 2):</strong> Creator apna secret prompt Explore Feed par publish karega. Jab bhi koi dusra user us prompt ko remix (use) karega, hum usse charge lenge aur <strong>creator ko uski kamayi (royalty) denge</strong>. Ye royalty percentage Supabase settings se easily change kiya ja sakta hai (jaise Gamified Levels ya flat split).</li>
+  <li><strong>Fix Uniform Pricing (Rule 3):</strong> Kitne credits lagenge ye prompt kitna lamba hai aur kaun sa AI model use ho raha hai uspe depend karega, lekin <strong>ek guaranteed limit (jaise 1 se 3 credits) ke andar hi rahega</strong>. User ko achanak koi bada bill dekhkar jhatka nahi lagega!</li>
+  <li><strong>Secret Formula Chori Se Bachana (Rule 4):</strong> App mein prompt text ko copy karna bilkul band (block) hai. User ko sirf ek basic idea dikhega, asli formula server par password-encrypted (AES-256) rahega jo direct AI model ke paas jayega.</li>
+</ul>
+<hr class="divider">
+<h2>2. Platform Ke 4 Core Business Rules (Aasan Bhasha Mein)</h2>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>Niyam (Rule)</th>
+      <th>Ye Kaise Kaam Karta Hai?</th>
+      <th>Business & Tech Fayda</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Rule 1: Pay-to-Download (Gallery Me Save Karne Par Charge)</strong></td>
+      <td>User prompt likhkar image banayega. Image app library mein free save rahegi. Phone ya PC gallery mein <strong>original 4K bina watermark wali file download karne ke flat 2 credits lagenge</strong>.</td>
+      <td>Shuru mein user ko rokte nahi hain, par jab use real photo chahiye tabhi hum paise lete hain. Isse users app chhod kar nahi bhagte.</td>
+    </tr>
+    <tr>
+      <td><strong>Rule 2: Creator Royalties (Prompt Banane Wale Ki Kamayi)</strong></td>
+      <td>User apna prompt Explore feed mein daal sakta hai. Jab koi dusra user use remix (use) karega, <strong>creator ko uski kamayi ka hissa milega</strong>. Iska percentage backend settings se dynamically decide hoga.</td>
+      <td>Creators apne followers ko hamari app par layenge taaki wo passive income kama sakein! Free mein viral marketing hogi.</td>
+    </tr>
+    <tr>
+      <td><strong>Rule 3: Dynamic Uniform Pricing (Fixed Range Me Fair Billing)</strong></td>
+      <td>Prompt kitna lamba hai, square hai ya wide, us hisab se compute kharcha nikalega. Lekin <strong>har category ka ek fix Min aur Max limit hoga</strong> (jaise Basic Model = 1 se 3 credits).</td>
+      <td>Fair billing: Chhote prompt ka kam, bade ka thoda zyada, par kabhi achanak anjaana bada charge nahi katega.</td>
+    </tr>
+    <tr>
+      <td><strong>Rule 4: Encrypted Prompt DRM (Secret Formula Chori Se Bachana)</strong></td>
+      <td>Public gallery mein prompt text copy karna band hai. Server prompt ko <strong>AES-256 password lock se encrypt</strong> karke rakhta hai. Remix dabane par seedha AI model ko bhejta hai.</td>
+      <td>Creators ka secret prompt formula internet par leak ya chori nahi ho sakta. Creator ka bharosa bana rahega.</td>
+    </tr>
+  </tbody>
+</table>
+<hr class="divider">
+<h2>3. MeiGen Ke Features (Jo Hamari App Mein Bhi Honge)</h2>
+<p>MeiGen.ai ke saare zaroori aur popular features hamari app mein shamil hain:</p>
+<h3>1. Explore & Prompt Discovery Feed (Photos Dekhne Ka Page)</h3>
+<ul class="unordered-list">
+  <li><strong>Masonry Grid Layout:</strong> Pinterest ya Instagram jaisa upar-niche scrolling feed sath mein <strong>Supabase pgvector</strong> se chalne wala <strong>"More like this"</strong> recommendation grid.</li>
+  <li><strong>Category Filter Buttons:</strong> Anime, Real Photo (Photorealism), Cyberpunk, 3D Render, Architecture, Product, Logo.</li>
+  <li><strong>Dual-Action Buttons Har Card Par:</strong></li>
+  <li><strong><code>Use as Prompt</code> (1-Tap Remix):</strong> Prompt formula aur smart chips ko studio mein load karna taaki user remix kar sake.</li>
+  <li><strong><code>Use as Ref</code> (1-Tap Reference):</strong> Card ki photo ko direct Reference Image slot mein daal dena taaki us photo jaisa pose ya style banaya ja sake.</li>
+  <li><strong>Social Features:</strong> Likes, Shares, Bookmarks, View count, aur Creator Profile page.</li>
+</ul>
+<h3>2. AI Image Creation Studio (Photo Banane Ka Studio)</h3>
+<ul class="unordered-list">
+  <li><strong>Consistent Characters & Face Lock:</strong> User apne ya kisi model ke chehre ki <strong>3 angles (Front, 45°, Side)</strong> se photos upload karke character profile save kar sakta hai (InstantID Apache 2.0). Phir chahe samurai photo bane ya cyberpunk — chehra 100% wahi lock rahega!</li>
+  <li><strong>Multi-Reference Images (<code>+ Add reference images</code>):</strong> Pose, character ya style ke liye alag-alag reference photos jodna.</li>
+  <li><strong>Interactive Studio Bar:</strong></li>
+  <li><strong>Batch Count (<code>- 1/4 +</code>):</strong> Ek click mein 1 se lekar 4 photos ek sath generate karna.</li>
+  <li><strong>Seed Lock (<code>🔒</code>):</strong> Photo ka exact random seed lock karna taaki agle prompt par overall scene waisa hi rahe.</li>
+  <li><strong>Aspect Ratio Selector:</strong> <code>Auto</code> (Uploaded photo ka size auto-detect karega), 1:1, 9:16, 16:9, 4:5.</li>
+  <li><strong>Resolution Toggle:</strong> Standard HD, 2K, aur 4K.</li>
+  <li><strong>Dynamic Credit Button:</strong> <code>Generate ✨ 10</code> (Kitne credits katenge wo button par hi dikhega).</li>
+  <li><strong>Dual In-Prompt AI Buttons:</strong></li>
+  <li><strong><code>Enhance</code>:</strong> Chhota sa idea likho, Gemini 1.5 Flash <200ms mein studio prompt bana deta hai.</li>
+  <li><strong><code>✨ AI Edit</code>:</strong> Uploaded photo ko base banakar kapde ya background badalna, jabki insaan waisa hi lock rahe (<code>EDIT THE PROVIDED PHOTO — ABSOLUTE LOCK</code>).</li>
+  <li><strong>Photo se Prompt Scanner:</strong> Photo scan karke uska prompt formula decode karna.</li>
+</ul>
+<h3>3. Dedicated AI Video Suite (Video Banane Ka Section)</h3>
+<ul class="unordered-list">
+  <li><strong>Photo Se Video Banana (Text-to-Video & Image-to-Video):</strong> Kisi bhi still photo ko chalte-phirte video clip mein convert karna.</li>
+  <li><strong>LivePortrait Face Motion (Chehre Ka Motion):</strong> Normal selfie se smile karwana, aankh marna (wink), bolna ya sar hilwana (preset animation ya driving video se).</li>
+  <li><strong>Camera Controls:</strong> Camera ghumana (Pan Left/Right), upar-niche karna (Tilt), paas lana (Zoom-in), ya ghoom kar view lena (3D Orbit).</li>
+  <li><strong>Duration Selector:</strong> 3-second aur 5-second ke quick video clips.</li>
+</ul>
+<h3>4. Creative Skills Toolbox (Smart AI Tools)</h3>
+<ul class="unordered-list">
+  <li><strong>AI Background Remover:</strong> Ek tap mein kisi bhi photo ka background hatana (transparent PNG).</li>
+  <li><strong>AI Portrait Relighting & Blur:</strong> DSLR jaisa pichhe blur (bokeh) karna aur chehre par studio lighting adjust karna.</li>
+  <li><strong>AI 4K Enhancer (Upscaler):</strong> Dhundli ya choti photo ko crystal-clear 4K HD mein convert karna.</li>
+  <li><strong>AI Face Swap & Re-Aging:</strong> Chehra badalna aur umar (age) choti ya badi karke dekhna (<strong>InstantID / ReActor — Apache 2.0 Commercial License</strong>).</li>
+</ul>
+<h3>5. Cloud Library & Creator Dashboard</h3>
+<ul class="unordered-list">
+  <li>User ki banayi hui saari photos Supabase storage mein hamesha safe save rahengi.</li>
+  <li>Folders aur Collections (jaise "YouTube Thumbnails", "Wallpapers").</li>
+  <li>Paginated library sync (<code>GET /api/v1/users/me/library</code>).</li>
+  <li>Status Badge: <em>"Cloud Mein Free Saved"</em> vs <em>"Phone Mein Downloaded"</em>.</li>
+  <li>Creator Analytics: Kitne logon ne aapka prompt remix kiya, kitne paise/credits kamaye, aur bank payout button.</li>
+</ul>
+<hr class="divider">
+<h2>4. Perfect Image Kaise Banegi? (4 Smart Steps Ka System)</h2>
+<p>Agar koi aam user sirf itna likhe: <em>"beautiful girl in rain"</em>, toh AI aksar ajeeb si photo bana deta hai (plastic jaisi skin, 6 ungliyan, kharab chehra).</p>
+<p><strong>MeiGen aur hamari app isko 4 automated steps se 100% perfect banati hai:</strong></p>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>Step / Engine</th>
+      <th>Ye Kaise Kaam Karega?</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>1. 🪄 Magic Prompt Expander (Gemini 1.5 Flash)</strong></td>
+      <td>User likhta hai: "cyberpunk car". Gemini AI turant 200ms mein studio tags jod deta hai: "85mm lens, neon rim lighting, rain reflections on road, 8k resolution, cinematic lighting".</td>
+    </tr>
+    <tr>
+      <td><strong>2. 👁️ Photo Scanner (Vision Interrogator)</strong></td>
+      <td>Agar user koi reference photo deta hai, AI usko scan karke camera angle, lighting aur style keywords ka exact prompt nikaal leta hai.</td>
+    </tr>
+    <tr>
+      <td><strong>3. 🧩 Dropdown Chips (Variable Templates)</strong></td>
+      <td>80% prompt pehle se expert engineers ka set hota hai; user ko sirf 2–3 dropdown badalne hote hain ([character], [kapde], [mood]). Galti hone ka chance hi nahi bachta!</td>
+    </tr>
+    <tr>
+      <td><strong>4. 🛡️ Invisible Negative Filter (Kharab Cheezein Rokna)</strong></td>
+      <td>Backend chupke se negative prompt jod deta hai: "bad anatomy, 6 fingers, blurry, watermark, low quality". Kharab aur deformed photos banne se pehle hi ruk jaati hain!</td>
+    </tr>
+  </tbody>
+</table>
+<h3>Prompt Transformation Ka Asli Example (Before vs After)</h3>
+<ul class="unordered-list">
+  <li><strong>User Ne Likha (Raw Input):</strong> <code>"samurai girl in neon city"</code></li>
+  <li><strong>Magic Expander Ne Banaya (Studio Prompt):</strong> <code>"Cinematic portrait of female ronin in cyberpunk kimono, wet asphalt Neo-Tokyo street, reflecting neon magenta lights, 85mm f/1.4 lens, 8k, hyper-detailed skin texture."</code></li>
+  <li><strong>Server Ne Filter Lagaya (Negative Prompt):</strong> <code>"bad anatomy, 6 fingers, blurry, watermark, extra limbs, low resolution, deformed face."</code></li>
+  <li><strong>GPU Worker Ka Output:</strong> Serverless GPU par bina kisi kharabi ke crystal-clear photorealistic image generate ho jaati hai.</li>
+</ul>
+<hr class="divider">
+<h2>5. Dynamic Pricing & Uniform Range Ka Logic (Rule 3)</h2>
+<h3>5.1 Uniform Range Kya Hai?</h3>
+<p>Aisa kabhi nahi hoga ki user ko pata hi na chale kitne credits katenge aur achanak se bada bill aa jaye.</p>
+<p>Har category ka <strong>Minimum aur Maximum credit pehle se fix hota hai</strong>:</p>
+<ul class="unordered-list">
+  <li><strong>Basic Tier (Normal Photos):</strong> Hamesha <strong>1 se 3 Credits</strong> ke beech hi hoga.</li>
+  <li><strong>Standard Tier (High Quality SDXL):</strong> Hamesha <strong>3 se 6 Credits</strong> ke beech hi hoga.</li>
+  <li><strong>Pro Tier (Special Models):</strong> Hamesha <strong>8 se 15 Credits</strong> ke beech hi hoga.</li>
+  <li><strong>Ultra Studio:</strong> Hamesha <strong>15 se 22 Credits</strong> ke beech hi hoga.</li>
+  <li><strong>Download Master File (Original 4K):</strong> <strong>Flat 2 Credits</strong> ($0.20 ya ₹17).</li>
+</ul>
+<h3>5.2 Charge Calculate Karne Ke 5 Simple Factors</h3>
+<p>Jab user "Generate" dabata hai, backend ye 5 cheezein dekhkar exact credits nikalta hai:</p>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>Factor</th>
+      <th>Metric (Kya Check Hoga)</th>
+      <th>Kitna Farq Padega?</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>1. Kaun Sa Model Hai</strong></td>
+      <td>Basic (Flux) = 1 Cr; Standard (SDXL) = 3 Cr; Pro = 8 Cr; Ultra = 15 Cr</td>
+      <td>1 se 15 Credits</td>
+    </tr>
+    <tr>
+      <td><strong>2. Prompt Ki Lambai</strong></td>
+      <td>Chhota (<= 30 words) = +0; Medium (31–80 words) = +1; Bada (81+ words) = +2</td>
+      <td>+0 se +2 Credits</td>
+    </tr>
+    <tr>
+      <td><strong>3. Photo Ka Size (Resolution)</strong></td>
+      <td>Square (1:1) = +0; Widescreen ya Story (16:9, 9:16) = +0.5; 4K Upscale = +2.0</td>
+      <td>+0 se +2 Credits</td>
+    </tr>
+    <tr>
+      <td><strong>4. Detailing Steps (Quality)</strong></td>
+      <td>Fast (<= 20 steps) = +0; Fine Quality (21–40 steps) = +0.5; Deep Quality = +1.0</td>
+      <td>+0 se +1 Credit</td>
+    </tr>
+    <tr>
+      <td><strong>5. Magic Prompt Button</strong></td>
+      <td>User ka apna text = +0; Agar "Magic Prompt" button use kiya = +0.5</td>
+      <td>+0 ya +0.5 Credit</td>
+    </tr>
+  </tbody>
+</table>
+<h3>5.3 Calculation Ka Formula</h3>
+<ul class="unordered-list">
+  <li><strong>Total Estimate:</strong></li>
+</ul>
+<p><code>Raw Score = Model Base Cost + Words Extra + Size Extra + Steps Extra + Magic Expander Extra</code></p>
+<ul class="unordered-list">
+  <li><strong>Final Charge (Guaranteed Limit Ke Andar):</strong></li>
+</ul>
+<p><code>Final Charge = Clamp( RoundHalfUp(Raw Score), Minimum Limit, Maximum Limit )</code></p>
+<hr class="divider">
+<h2>6. Business Munafa (Profit Margins) Aur Royalty Ke Options</h2>
+<h3>6.1 Unit Economics (Kitna Kharcha, Kitni Kamayi)</h3>
+<p>Hamare business model ke hisab se calculations ye hain:</p>
+<ul class="unordered-list">
+  <li><strong>1 Credit Ki Keemat:</strong> 10 Credits = $1.00 USD (Matlab <strong>1 Credit = $0.10 USD ya lagbhag ₹8.5 INR</strong>).</li>
+</ul>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>User Ne Kya Banaya</th>
+      <th>User Ne Kitne Diye</th>
+      <th>Hamari Gross Kamayi</th>
+      <th>Server Ka Asli Kharcha</th>
+      <th>Hamara Net Munafa (%)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Basic Image (Flux)</strong></td>
+      <td>2 Credits</td>
+      <td>$0.200 (₹17.0)</td>
+      <td>$0.0020 (₹0.17)</td>
+      <td><strong>$0.1980 (99.0% Munafa!)</strong></td>
+    </tr>
+    <tr>
+      <td><strong>Standard HD (SDXL)</strong></td>
+      <td>4 Credits</td>
+      <td>$0.400 (₹34.0)</td>
+      <td>$0.0050 (₹0.42)</td>
+      <td><strong>$0.3950 (98.7% Munafa!)</strong></td>
+    </tr>
+    <tr>
+      <td><strong>Community Remix</strong></td>
+      <td>5 Credits</td>
+      <td>$0.500 (₹42.5)</td>
+      <td>$0.0050 (₹0.42)</td>
+      <td><strong>$0.2950 (59.0% Net)\</strong>*</td>
+    </tr>
+    <tr>
+      <td><strong>Download 4K Master</strong></td>
+      <td>2 Credits</td>
+      <td>$0.200 (₹17.0)</td>
+      <td>$0.0025 (₹0.21 Bandwidth)</td>
+      <td><strong>$0.1975 (98.7% Munafa!)</strong></td>
+    </tr>
+    <tr>
+      <td><strong>LivePortrait Video</strong></td>
+      <td>10 Credits</td>
+      <td>$1.000 (₹85.0)</td>
+      <td>$0.0150 (₹1.27)</td>
+      <td><strong>$0.9850 (98.5% Munafa!)</strong></td>
+    </tr>
+  </tbody>
+</table>
+<h3>6.2 Creator Royalty Policy Ke 4 Models</h3>
+<ol class="ordered-list">
+  <li><strong>Model 1 (Recommended): Level Ke Hisab Se Royalty (Tiered Gamification)</strong></li>
+</ol>
+<ul class="unordered-list">
+  <li>Bronze (< 100 remixes): 20% Creator / 80% Platform</li>
+  <li>Silver (100–500 remixes): 30% Creator / 70% Platform</li>
+  <li>Gold (500–2,000 remixes): 40% Creator / 60% Platform</li>
+  <li>Diamond (> 2,000 remixes): 50% Creator / 50% Platform</li>
+</ul>
+<ol class="ordered-list">
+  <li><strong>Model 2: Flat Configurable Split (Baseline)</strong></li>
+</ol>
+<ul class="unordered-list">
+  <li>Sabhi par ek flat percentage (jaise 40% creator ko, 60% platform ko).</li>
+</ul>
+<ol class="ordered-list">
+  <li><strong>Model 3: Fixed Credit Bounty</strong></li>
+</ol>
+<ul class="unordered-list">
+  <li>Har remix par flat 1 ya 2 Credits creator ko milenge.</li>
+</ul>
+<ol class="ordered-list">
+  <li><strong>Model 4: Creator Markup</strong></li>
+</ol>
+<ul class="unordered-list">
+  <li>Creator khud apna extra credit daam set karega; platform 20% commission lega.</li>
+</ul>
+<hr class="divider">
+<h2>7. Flutter, Next.js 15, FastAPI Aur Supabase Ka Architecture</h2>
+<h3>7.1 Kaun Kya Sambhalega?</h3>
+<ul class="unordered-list">
+  <li><strong>Flutter Mobile App:</strong></li>
+  <li>iOS 15+ aur Android SDK 21–36 par native performance.</li>
+  <li>Responsive ScreenUtil layout: har phone par bina kisi visual cut ke chalega.</li>
+  <li>Native screenshot aur screen record protection (<code>FLAG_SECURE</code>).</li>
+  <li>Supabase Realtime se direct connection: photo bante hi screen update.</li>
+  <li><strong>Next.js 15 Web Platform:</strong></li>
+  <li>High-performance desktop creation studio aur public prompt marketplace.</li>
+  <li>Server-Side Rendering (SSR) taaki Google search par marketplace rank kare.</li>
+  <li>WebGL / Canvas studio viewport with interactive controls.</li>
+  <li>Canvas-based DRM protection aur right-click blocking taaki prompt chori na ho.</li>
+  <li><strong>FastAPI (Python Compute Gateway):</strong></li>
+  <li>Non-blocking authentication check using Supabase JWT tokens.</li>
+  <li>Stripe payment webhook (<code>POST /api/v1/wallet/stripe-webhook</code>) automatic credit pack recharge ke liye.</li>
+  <li>Paginated user library API (<code>GET /api/v1/users/me/library?page=1&limit=20</code>).</li>
+  <li>Prompt analyze karna aur correct credits calculate karna (<code>round_half_up</code>).</li>
+  <li>Gemini AI se magic prompt expand karwana (<200ms).</li>
+  <li>AES-256-GCM se secret prompt ko password-lock lagana aur kholna.</li>
+  <li>Image se hidden metadata hatana taaki koi secret prompt chori na kare.</li>
+  <li>Supabase Storage ke zariye <strong>15-minute (900s) valid download links</strong> banana.</li>
+  <li><strong>Supabase (PostgreSQL Database, Auth, Realtime & Storage):</strong></li>
+  <li><strong>Supabase Auth:</strong> Google, Apple, Email aur Guest login SSO with JWTs.</li>
+  <li><strong>PostgreSQL Database:</strong> Ekdum pakka ACID transaction system with Row-Level Lock (<code>SELECT ... FOR UPDATE</code>) aur Row Level Security (RLS).</li>
+  <li><strong><code>pgvector</code> Extension:</strong> Direct database ke andar vector similarity search jo <strong>"More like this"</strong> discovery feed chalata hai.</li>
+  <li><strong>Supabase Realtime:</strong> WebSocket streams jisse photo complete hote hi <strong><50ms mein screen par aa jaati hai</strong> (polling ki zaroorat nahi).</li>
+  <li><strong>Supabase Storage:</strong> Master 4K files private bucket mein aur preview images fast CDN bucket par.</li>
+</ul>
+<h3>7.2 Background Queue (App Kabhi Atkegi Ya Hang Nahi Hogi)</h3>
+<p>Jab user "Generate" dabata hai:</p>
+<ol class="ordered-list">
+  <li>Server turant phone/web ko bol deta hai: <em>"Job receive ho gayi hai, line mein lag gayi hai"</em> (sirf 50ms mein).</li>
+  <li>Request background GPU worker ke paas chali jaati hai.</li>
+  <li>Phone/Web par loading animation chalta hai jabki server background mein photo generate karke database update kar deta hai.</li>
+  <li>Supabase Realtime se app ko turant pata chal jaata hai aur screen par photo dikh jaati hai. Device kabhi hang nahi hota!</li>
+</ol>
+<hr class="divider">
+<h2>8. App Ke Khatre (Loopholes) Aur Unka Pakka Ilaaj</h2>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>Khatra / Attack Vector</th>
+      <th>Asli Problem Kya Hai?</th>
+      <th>Hamara Production Ilaaj</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>1. Sybil Fake Account Farming</strong></td>
+      <td>500 fake accounts banakar free signup credits se apne hi prompt ko remix karke cash nikalna.</td>
+      <td><strong>Purchased Credit Rule</strong>. Royalty sirf tabhi banegi jab remix karne wale ne paise se credit khareede hon. Free credits se cash royalty zero banegi.</td>
+    </tr>
+    <tr>
+      <td><strong>2. Double-Spend Race</strong></td>
+      <td>3 credit ke wallet se ek sath 10 tap karke 10 photos generate kar lena.</td>
+      <td><strong>PostgreSQL ACID Lock (<code>SELECT ... FOR UPDATE</code>) + Redis Lock</strong>. Ek time par ek hi deduction hoga.</td>
+    </tr>
+    <tr>
+      <td><strong>3. Re-Download Double Charge</strong></td>
+      <td>Ek bar 2 credit dekar unlock ki hui image ka link expire hone par dubara paise kat jana.</td>
+      <td><strong>Idempotent Unlock Check</strong>. Backend pehle check karega agar <code>is_download_unlocked == True</code> hai toh ₹0 (free) mein naya link de dega.</td>
+    </tr>
+    <tr>
+      <td><strong>4. Slow Mobile Download Failure</strong></td>
+      <td>60-second ka link 3G/4G network par 20MB 4K photo download hone se pehle hi expire ho jana.</td>
+      <td><strong>15-Minute (900s) Download Link TTL</strong>. Supabase Storage se mobile network par file aaram se aur bina fail huye download hogi.</td>
+    </tr>
+    <tr>
+      <td><strong>5. Commercial Legal Risk</strong></td>
+      <td>Non-commercial research model (jaise InsightFace) commercial app mein use karne par copyright lawsuit ka darr.</td>
+      <td><strong>100% Commercial Open Source Models</strong>. Face swap ke liye <strong>InstantID (Apache 2.0 License)</strong> aur <strong>ReActor</strong> use hoga.</td>
+    </tr>
+    <tr>
+      <td><strong>6. EXIF Data Leak</strong></td>
+      <td>Image ke andar chhupe huye background data se secret prompt chori hona.</td>
+      <td><strong>Automated EXIF Purge</strong>. Save karne se pehle sara metadata saaf kar diya jaata hai.</td>
+    </tr>
+    <tr>
+      <td><strong>7. Screenshot & Copy Protection</strong></td>
+      <td>App ke andar se prompt formula chori karna ya screen capture karna.</td>
+      <td><strong>Native Mobile DRM</strong> (Android par <code>FLAG_SECURE</code>, iOS par screen capture detection) + Next.js Web par right-click block.</td>
+    </tr>
+  </tbody>
+</table>
+<hr class="divider">
+<h2>9. Frontend Architecture: Flutter Mobile & Next.js 15 Web</h2>
+<h3>9.1 Flutter Mobile App Rules</h3>
+<ol class="ordered-list">
+  <li><strong>Universal Sizing (ScreenUtil):</strong> Base design 390 × 844 dp par bana hai. Har button aur text phone ke screen size ke hisab se automatically adjust hoga.</li>
+  <li><strong>Defensive Layout (Screen Phate Nahi):</strong> Prompt buttons hamesha <code>Wrap</code> mein honge; dynamic text <code>Flexible</code> / <code>Expanded</code> mein hoga; keyboard khulne par screen smoothly scroll hogi.</li>
+  <li><strong>Screenshot & Copy DRM:</strong> Native <code>FLAG_SECURE</code> (Android) aur screen capture detection (iOS).</li>
+</ol>
+<h3>9.2 Next.js 15 Web Rules</h3>
+<ol class="ordered-list">
+  <li><strong>Server-Side Rendering (SSR):</strong> Marketplace feed server par render hoga taaki Google search par har prompt rank ho sake.</li>
+  <li><strong>Supabase SSR Auth:</strong> Secure HTTP-only cookies se login tokens safe rahenge.</li>
+  <li><strong>Web DRM:</strong> Canvas rendering, right-click disabled, aur CSS selection disabled (<code>user-select: none</code>).</li>
+</ol>
+<hr class="divider">
+<h2>10. Technical Challenges, Limitations Aur Unka Samadhan</h2>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>Challenge / Limitation</th>
+      <th>Asli Problem Kya Hai?</th>
+      <th>Hamara Production Ilaaj</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>1. GPU Cold Start (Serverless Shuru Hone Mein Time)</strong></td>
+      <td>Jab traffic achanak badhta hai, naya GPU worker start hone aur 15GB model load karne mein 15-25s lag sakte hain.</td>
+      <td>Din ke peak time 1 warm GPU standby rahega; fast NVMe storage cache use hoga; 5s se zyada delay par backup service par instant transfer.</td>
+    </tr>
+    <tr>
+      <td><strong>2. Slow Network Par 4K Photo Download</strong></td>
+      <td>20MB ki badi file 3G/4G network par slow download hone par link expire ho sakta hai.</td>
+      <td>Link ka validity time 15 minute (900s) rakha gaya hai via Supabase Storage; background download manager; dubara download hamesha free.</td>
+    </tr>
+    <tr>
+      <td><strong>3. Web Browser DRM Ki Limitations</strong></td>
+      <td>Mobile app mein toh screenshot block (<code>FLAG_SECURE</code>) ho jata hai, par web browser mein dusre phone se photo khinchne se 100% nahi roka ja sakta.</td>
+      <td>Master prompt server par hi rehta hai, web par kabhi bheja hi nahi jata; Next.js web par right-click disabled rehta hai; sirf image aur basic tags dikhte hain.</td>
+    </tr>
+    <tr>
+      <td><strong>4. Viral Prompts Par GPU Ka Extra Kharcha</strong></td>
+      <td>Agar koi prompt viral ho gaya aur hazaron log ek sath remix karne lage, toh server ka bill achanak badh sakta hai.</td>
+      <td>Rate limiter (ek user ke max 5 active jobs); max 20 GPU workers ki ceiling limit taaki company ka budget safe rahe.</td>
+    </tr>
+    <tr>
+      <td><strong>5. Third-Party AI API Ka Quota Khatam Hona</strong></td>
+      <td>Google Gemini API ka per-minute quota viral marketing ke time limit cross kar sakta hai.</td>
+      <td>Ek jaise prompts ko Redis mein 1 ghante tak cache karke rakhna; API busy hone par local smart template se prompt banana.</td>
+    </tr>
+    <tr>
+      <td><strong>6. Galat / NSFW Content Rokna</strong></td>
+      <td>Kuch users galat ya deepfake photos banane ki koshish kar sakte hain.</td>
+      <td>3-Layer Filter: (1) Gemini AI safety settings, (2) Server par blacklisted words, (3) GPU output par automatic safety checker.</td>
+    </tr>
+  </tbody>
+</table>
+<hr class="divider">
+<h2>11. Kaam Ka Timeline (8 Hafte / 4 Sprints)</h2>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>Sprint</th>
+      <th>Main Focus</th>
+      <th>Kya Bankar Ready Hoga?</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Sprint 1 (Hafte 1–2)</strong></td>
+      <td>Core DRM, Supabase & Paywall</td>
+      <td>• Supabase PostgreSQL Schema, RLS & Storage Buckets; • In-App Cloud Library; • 2-Credit Idempotent Download Paywall; • 15-Minute secure download links; • Stripe Payment Webhook; • Mobile <code>FLAG_SECURE</code> copy protection</td>
+    </tr>
+    <tr>
+      <td><strong>Sprint 2 (Hafte 3–4)</strong></td>
+      <td>AI Image Studio Aur Pricing</td>
+      <td>• Automatic credit calculation aur limit clamping algorithm (<code>round_half_up</code>); • Gemini AI Magic Prompt Expander; • Fast GPU worker aur backup service; • Next.js 15 Web Studio Scaffold</td>
+    </tr>
+    <tr>
+      <td><strong>Sprint 3 (Hafte 5–6)</strong></td>
+      <td>Marketplace Aur Creator Kamayi</td>
+      <td>• Server-Side AES-256 Prompt DRM; • Anti-Sybil Royalty Ledger (<code>purchased_balance</code> check); • Explore Grid aur 1-Tap Remix bottom popup; • Supabase <code>pgvector</code> recommendations</td>
+    </tr>
+    <tr>
+      <td><strong>Sprint 4 (Hafte 7–8)</strong></td>
+      <td>Video Suite Aur Final Launch</td>
+      <td>• LivePortrait face motion pipeline; • InstantID face swap pipeline (Apache 2.0); • Next.js 15 SSR live deployment; • Automated CI/CD pipelines & production live launch</td>
+    </tr>
+  </tbody>
+</table>
+<hr class="divider">
+<h2>12. Final Summary Checklist</h2>
+<p>Aap is guide ke zariye kisi bhi review mein poore confidence ke sath point-to-point bol sakte hain:</p>
+<ul class="unordered-list">
+  <li>[x] <strong>MeiGen Ke Saare Features Clear Hain:</strong> Explore Feed (with <code>pgvector</code>), Image Studio, AI Video Suite, aur 4 Smart AI Tools.</li>
+  <li>[x] <strong>Platform Ke 4 Niyam Clear Hain:</strong> Free image creation, 2-credit download paywall, creator royalty (configurable remote split), uniform pricing brackets, aur encrypted secret prompt DRM.</li>
+  <li>[x] <strong>Unit Economics Zabardast Hai:</strong> 1 Credit = $0.10, aur har generation par hamara gross margin <strong>98%+</strong> hai.</li>
+  <li>[x] <strong>Tech Stack Clear Hai:</strong> Flutter Mobile (iOS/Android) + Next.js 15 Web Platform + FastAPI (Python) + Supabase (PostgreSQL, Auth, Storage, Realtime, pgvector).</li>
+  <li>[x] <strong>Technical Challenges & Limitations Solved:</strong> Cold start warmup, 15m download links, anti-abuse filters, aur legal commercial compliance (InstantID Apache 2.0).</li>
+</ul>
+</body>
+</html>

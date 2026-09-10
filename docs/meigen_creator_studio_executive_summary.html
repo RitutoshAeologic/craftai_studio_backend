@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MeiGen Creator Studio — Executive Review & Architecture Summary</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Calibri, Arial, sans-serif;
+    color: #1A202C;
+    background-color: #FFFFFF;
+    line-height: 1.6;
+    margin: 40px auto;
+    max-width: 900px;
+    padding: 0 20px;
+  }
+  h1 {
+    color: #0B0F19;
+    font-size: 26pt;
+    border-bottom: 2px solid #00F2FE;
+    padding-bottom: 8px;
+    margin-top: 30px;
+  }
+  h2 {
+    color: #0F172A;
+    font-size: 18pt;
+    border-bottom: 1px solid #E2E8F0;
+    padding-bottom: 6px;
+    margin-top: 28px;
+  }
+  h3 {
+    color: #1E293B;
+    font-size: 14pt;
+    margin-top: 20px;
+  }
+  h4 {
+    color: #334155;
+    font-size: 12pt;
+    margin-top: 16px;
+  }
+  p, li {
+    font-size: 11pt;
+    color: #2D3748;
+  }
+  .callout {
+    background-color: #F8FAFC;
+    border-left: 4px solid #00F2FE;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout p {
+    margin: 0;
+    color: #1E293B;
+    font-weight: 500;
+  }
+  .word-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+    font-size: 10.5pt;
+  }
+  .word-table th {
+    background-color: #0F172A;
+    color: #FFFFFF;
+    font-weight: 600;
+    text-align: left;
+    padding: 10px 14px;
+    border: 1px solid #0F172A;
+  }
+  .word-table td {
+    padding: 9px 14px;
+    border: 1px solid #CBD5E1;
+    vertical-align: top;
+  }
+  .word-table tr:nth-child(even) {
+    background-color: #F8FAFC;
+  }
+  .code-block {
+    background-color: #0B0F19;
+    color: #F1F5F9;
+    padding: 14px 18px;
+    border-radius: 6px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 10pt;
+    overflow-x: auto;
+    border: 1px solid #1E293B;
+  }
+  code {
+    background-color: #EDF2F7;
+    color: #C53030;
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 10pt;
+  }
+  .code-block code {
+    background-color: transparent;
+    color: #F1F5F9;
+    padding: 0;
+  }
+  .divider {
+    border: 0;
+    height: 1px;
+    background: #E2E8F0;
+    margin: 30px 0;
+  }
+  ol, ul {
+    padding-left: 24px;
+  }
+  li {
+    margin-bottom: 6px;
+  }
+</style>
+</head>
+<body>
+<h1>MeiGen Creator Studio — Executive Review & Architecture Summary</h1>
+<div class="callout"><p><strong>Document Purpose:</strong> High-level executive review document covering product vision, core business rules, MeiGen feature parity, unit economics, architecture, security, and the 8-week delivery roadmap.</p></div>
+<div class="callout"><p><strong>Estimated Review Time:</strong> 5–7 minutes (~3–4 pages in MS Word).</p></div>
+<div class="callout"><p><strong>Technology Stack:</strong> Flutter (iOS/Android) • Next.js 15 (Web Platform) • FastAPI (Python) • Supabase (PostgreSQL, Auth, Storage, Realtime, pgvector) • Serverless GPU Workers.</p></div>
+<hr class="divider">
+<h2>1. Executive Snapshot & Value Proposition</h2>
+<p>MeiGen Creator Studio combines an <strong>AI Image & Video Creation Studio</strong> with a <strong>Community Prompt Marketplace</strong> (inspired by MeiGen.ai), deployed across <strong>Flutter Mobile (iOS/Android)</strong> and <strong>Next.js 15 Web</strong>.</p>
+<h3>The Problem With Current AI Apps:</h3>
+<ol class="ordered-list">
+  <li><strong>Upfront Paywalls:</strong> Demanding money before creation leads to an <strong>85%+ user drop-off</strong>.</li>
+  <li><strong>Zero Creator Protection:</strong> Popular prompts are easily copied from public feeds, leaving creators unrewarded.</li>
+</ol>
+<h3>Our Solution ("The Creator Flywheel"):</h3>
+<ul class="unordered-list">
+  <li><strong>Free Creation:</strong> Users create and save unlimited images inside their in-app Cloud Library at zero cost.</li>
+  <li><strong>Pay-to-Download:</strong> Exporting high-resolution, unwatermarked 4K master files to the device gallery costs <strong>flat 2 Credits ($0.20)</strong>. Re-downloads of already unlocked images are <strong>100% free (idempotent)</strong>.</li>
+  <li><strong>Anti-Sybil Creator Royalties:</strong> Creators publish prompts to the Explore feed and earn <strong>passive royalties on community remixes</strong> (configurable via Supabase settings). Royalties are strictly funded from <em>purchased credits</em> to prevent fake-account cash farming.</li>
+  <li><strong>Guaranteed Uniform Pricing:</strong> AI generation costs scale dynamically with compute complexity, but are strictly capped within <strong>predictable tier brackets (e.g., 1–3 credits)</strong> using explicit <code>round_half_up</code> rounding.</li>
+  <li><strong>Server-Side AES-256 Envelope Encryption:</strong> Secret prompts are encrypted with AES-256-GCM; client UI displays aesthetic abstracts only and direct copying is blocked.</li>
+</ul>
+<hr class="divider">
+<h2>2. The 4 Core Business Rules</h2>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>Rule</th>
+      <th>Mechanism</th>
+      <th>Business & Technical Value</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Rule 1: Pay-to-Download (Idempotent)</strong></td>
+      <td>In-app creation and cloud library are free. Unlocking high-res 4K files to device gallery requires <strong>2 credits ($0.20)</strong> on first export; subsequent re-downloads are free.</td>
+      <td>Eliminates user onboarding friction while monetizing high-intent exports without unfair double-charging.</td>
+    </tr>
+    <tr>
+      <td><strong>Rule 2: Anti-Sybil Creator Royalties</strong></td>
+      <td>Creators earn royalties whenever community members remix their published prompts. Funded strictly via <em>purchased credits</em> to block promotional credit farming.</td>
+      <td>Generates organic user growth; creators actively bring their audience to earn passive income safely.</td>
+    </tr>
+    <tr>
+      <td><strong>Rule 3: Range-Bound Dynamic Pricing</strong></td>
+      <td>Compute charges adjust by prompt tokens, model, and resolution, but remain strictly locked inside <strong>predefined Min–Max limits</strong>.</td>
+      <td>Fair compute-based billing without bill shocks or unexpected overcharges.</td>
+    </tr>
+    <tr>
+      <td><strong>Rule 4: Server-Side AES-256 DRM</strong></td>
+      <td>Prompts are AES-256 encrypted on the server; client UI displays aesthetic abstracts only. Direct copy is blocked on mobile and web.</td>
+      <td>Protects creators' proprietary prompt recipes from plagiarism without misleading "Zero-Knowledge" claims.</td>
+    </tr>
+  </tbody>
+</table>
+<hr class="divider">
+<h2>3. MeiGen Feature Parity Matrix</h2>
+<p>Our platform delivers full feature parity with MeiGen.ai across 6 core modules:</p>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>Module</th>
+      <th>Core Capabilities</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>1. Explore & Prompt Gallery</strong></td>
+      <td>• Pinterest-style masonry grid feed with semantic <strong>"More like this"</strong> discovery grid powered by <strong>Supabase pgvector</strong>; • Category filters (Anime, Photorealism, Cyberpunk, 3D, Logo); • <strong>Dual-Action Card Drawer:</strong> <strong><code>Use as Prompt</code></strong> (1-Tap Remix formula) and <strong><code>Use as Ref</code></strong> (1-Tap Image Reference injection); • Social engagement: Likes, Shares, Creator Profiles</td>
+    </tr>
+    <tr>
+      <td><strong>2. AI Image Creation Studio</strong></td>
+      <td>• <strong>Consistent Characters & Face Lock:</strong> Save recurring character profiles with <strong>3-angle facial reference photos</strong> (InstantID Apache 2.0); • Multi-reference image slots (<code>+ Add reference images</code>); • Interactive Studio Bar: Batch Count (<code>- 1/4 +</code>), Seed Lock (<code>🔒</code>), Aspect Ratio (<code>Auto</code>, 1:1, 9:16, 16:9), Resolution (<code>2K / 4K</code>); • Dynamic button: <code>Generate ✨ {credits}</code></td>
+    </tr>
+    <tr>
+      <td><strong>3. In-Prompt AI Actions & Expander</strong></td>
+      <td>• <strong><code>Enhance</code> (Magic Expander):</strong> Gemini 1.5 Flash studio expansion (<200ms); • <strong><code>✨ AI Edit</code>:</strong> Instructed image modification with Subject Lock (<code>EDIT THE PROVIDED PHOTO — ABSOLUTE LOCK</code>); • Photo-to-Prompt vision scanner</td>
+    </tr>
+    <tr>
+      <td><strong>4. Dedicated AI Video Suite</strong></td>
+      <td>• Image-to-Video (I2V) and Text-to-Video (T2V); • LivePortrait Face Motion (Smile, Wink, Talk, Head Movement via preset animations & user driving video); • Camera controls (Pan, Tilt, Zoom, 3D Orbit); • 3s & 5s durations</td>
+    </tr>
+    <tr>
+      <td><strong>5. Creative Skills Toolbox</strong></td>
+      <td>• AI Background Remover (Transparent PNG); • Portrait Relighting & Bokeh Blur; • 4K Lossless Upscaler; • Face Swap & Re-Aging (InstantID / ReActor — <strong>Apache 2.0 Commercial License</strong>)</td>
+    </tr>
+    <tr>
+      <td><strong>6. Cloud Library & Creator Dashboard</strong></td>
+      <td>• Unlimited private cloud storage in Supabase; • Custom collections/folders; • Paginated library sync (<code>GET /api/v1/users/me/library</code>); • Creator analytics (Remix count, earnings, payout request)</td>
+    </tr>
+  </tbody>
+</table>
+<h3>Automated Prompt Engineering Pipeline (How Prompts Are Generated)</h3>
+<p>Everyday users don't know complex prompts. The system converts raw ideas into studio outputs via a <strong>4-Stage Pipeline</strong>:</p>
+<ol class="ordered-list">
+  <li><strong>User Input Channel:</strong> (A) Direct text (e.g., <em>"samurai girl"</em>), (B) Smart variable chips (<code>[character]</code>, <code>[clothing]</code>), (C) Consistent Character profile (3-angle face lock), or (D) Reference photo scan (Gemini Vision).</li>
+  <li><strong>Magic Prompt Expansion (<200ms):</strong> Google Gemini 1.5 Flash injects camera lens (85mm f/1.4), cinematic lighting, volumetric smoke, and 8K render fidelity.</li>
+  <li><strong>Negative Prompt Injection (Server-side):</strong> Server silently appends anti-distortion tokens (<code>bad anatomy, extra fingers, mutated hands, blurry, watermark</code>).</li>
+  <li><strong>Concrete Transformation:</strong></li>
+</ol>
+<ul class="unordered-list">
+  <li><em>Raw User Input:</em> <code>"samurai girl in neon city"</code></li>
+  <li><em>Generated Studio Prompt:</em> <code>"Cinematic medium portrait of a female ronin in dark cyberpunk kimono, wet asphalt Neo-Tokyo street, reflecting neon magenta lights, 85mm f/1.4 lens, 8k, photorealistic textures."</code></li>
+  <li><em>Execution:</em> Master prompt is encrypted with AES-256 and passed in-memory to serverless GPU workers (Flux/SDXL).</li>
+</ul>
+<hr class="divider">
+<h2>4. Financial Model & Unit Economics (98%+ Margins)</h2>
+<ul class="unordered-list">
+  <li><strong>Credit Value:</strong> 10 Credits = $1.00 USD (<strong>1 Credit = $0.10 USD / ~₹8.5 INR</strong>).</li>
+  <li><strong>Cost vs. Revenue Breakdown (Including Storage Egress):</strong></li>
+</ul>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>Action</th>
+      <th>Credits Charged</th>
+      <th>User Pays</th>
+      <th>Cloud Cost</th>
+      <th>Gross Profit</th>
+      <th>Net Margin (%)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Basic Image (Flux)</strong></td>
+      <td>2 Credits</td>
+      <td>$0.200</td>
+      <td>$0.0020</td>
+      <td><strong>$0.1980</strong></td>
+      <td><strong>99.0%</strong></td>
+    </tr>
+    <tr>
+      <td><strong>Standard HD (SDXL)</strong></td>
+      <td>4 Credits</td>
+      <td>$0.400</td>
+      <td>$0.0050</td>
+      <td><strong>$0.3950</strong></td>
+      <td><strong>98.7%</strong></td>
+    </tr>
+    <tr>
+      <td><strong>Community Remix\</strong>*</td>
+      <td>5 Credits</td>
+      <td>$0.500</td>
+      <td>$0.0050</td>
+      <td><strong>$0.2950</strong></td>
+      <td><strong>59.0% Net</strong></td>
+    </tr>
+    <tr>
+      <td><strong>Download 4K Master</strong></td>
+      <td>2 Credits</td>
+      <td>$0.200</td>
+      <td>$0.0025 (Egress)</td>
+      <td><strong>$0.1975</strong></td>
+      <td><strong>98.7%</strong></td>
+    </tr>
+    <tr>
+      <td><strong>LivePortrait Video</strong></td>
+      <td>10 Credits</td>
+      <td>$1.000</td>
+      <td>$0.0150</td>
+      <td><strong>$0.9850</strong></td>
+      <td><strong>98.5%</strong></td>
+    </tr>
+  </tbody>
+</table>
+<p><em>\</em>Assumes 40% creator royalty ($0.20 paid to creator, $0.30 retained by platform, leaving 59% net margin after compute cost).*</p>
+<hr class="divider">
+<h2>5. Creator Royalty Policy: 4 Proposed Models</h2>
+<div class="callout"><p><strong>Implementation Note:</strong> The royalty split is <strong>not hardcoded</strong>. It is a dynamic backend parameter (managed via Supabase <code>app_settings</code> / FastAPI configuration), allowing instant updates without app redeployment.</p></div>
+<ol class="ordered-list">
+  <li><strong>Model 1: Tiered Gamified Split (Recommended)</strong></li>
+</ol>
+<ul class="unordered-list">
+  <li>Bronze (< 100 remixes): <strong>20% Creator / 80% Platform</strong></li>
+  <li>Silver (100–500 remixes): <strong>30% Creator / 70% Platform</strong></li>
+  <li>Gold (500–2,000 remixes): <strong>40% Creator / 60% Platform</strong></li>
+  <li>Diamond (> 2,000 remixes): <strong>50% Creator / 50% Platform</strong></li>
+  <li><em>Strategic Value:</em> Gamification motivates creators to share their links externally. Platform keeps an <strong>80% margin on early-tier creators</strong>.</li>
+</ul>
+<ol class="ordered-list">
+  <li><strong>Model 2: Flat Configurable Split (Baseline Proposal)</strong></li>
+</ol>
+<ul class="unordered-list">
+  <li>A single platform-wide percentage (e.g., 30%, 40%, or 50%) applied uniformly. Simple to communicate.</li>
+</ul>
+<ol class="ordered-list">
+  <li><strong>Model 3: Fixed Credit Bounty (Compute-Safe)</strong></li>
+</ol>
+<ul class="unordered-list">
+  <li>Flat 1 or 2 Credits paid to creator per remix regardless of model complexity. Protects margins against GPU cost changes.</li>
+</ul>
+<ol class="ordered-list">
+  <li><strong>Model 4: Creator Markup (Open Marketplace)</strong></li>
+</ol>
+<ul class="unordered-list">
+  <li>Creators set their own extra credit markup (1–5 credits) over base cost; platform takes a 20% marketplace fee.</li>
+</ul>
+<hr class="divider">
+<h2>6. Architecture & Technology Division of Labor</h2>
+<ul class="unordered-list">
+  <li><strong>Mobile Client:</strong> Flutter (iOS 15+, Android SDK 21–36) with <code>supabase_flutter</code> for Auth, Realtime streams, and native DRM (<code>FLAG_SECURE</code>).</li>
+  <li><strong>Web Client:</strong> Next.js 15 (React, TypeScript, App Router) with Server-Side Rendering (SSR) for SEO-indexed prompt discovery and WebGL canvas.</li>
+  <li><strong>Compute Gateway:</strong> FastAPI (Python 3.11) ➔ Asynchronous Task Queue ➔ Serverless GPU Workers (RunPod / Modal / T4).</li>
+  <li><strong>Database & Cloud:</strong> Supabase (PostgreSQL 15+, Row Level Security, Realtime WebSockets, pgvector, and S3-compatible Storage).</li>
+</ul>
+<h3>Who Does What:</h3>
+<ul class="unordered-list">
+  <li><strong>Flutter Mobile App:</strong></li>
+  <li>ScreenUtil responsive engine (<code>.w</code>, <code>.h</code>, <code>.sp</code>) with zero RenderFlex overflow.</li>
+  <li>Native DRM: Android <code>FLAG_SECURE</code> and iOS screen capture detection.</li>
+  <li>Supabase Realtime client: updates generation progress in <50ms.</li>
+  <li><strong>Next.js 15 Web Platform:</strong></li>
+  <li>High-performance desktop studio and public marketplace.</li>
+  <li>Server-Side Rendering (SSR) for prompt discovery and search engine indexability.</li>
+  <li>Canvas-based DRM protection and anti-scraping event interceptors.</li>
+  <li><strong>FastAPI (Python Compute Gateway):</strong></li>
+  <li>Non-blocking auth verification using Supabase JWT tokens (<code>def get_current_user</code>).</li>
+  <li>Stripe webhook handler (<code>POST /api/v1/wallet/stripe-webhook</code>) for credit pack fulfillment.</li>
+  <li>Complexity Tokenizer & Dynamic Price Clamping (using <code>round_half_up</code>).</li>
+  <li>Gemini 1.5 Flash Magic Prompt Expansion (<200ms).</li>
+  <li>AES-256 Prompt Envelope Encryption / Decryption.</li>
+  <li>Automated EXIF metadata stripping before writing public previews.</li>
+  <li>Supabase Storage Signed Download URL generation with <strong>15-minute (900s) TTL</strong> for reliable mobile downloads.</li>
+  <li><strong>Supabase (PostgreSQL Database, Auth, Realtime & Storage):</strong></li>
+  <li><strong>Supabase Auth:</strong> Google, Apple, Email, and Anonymous SSO with JWTs.</li>
+  <li><strong>PostgreSQL Database:</strong> ACID relational transactions with Row-Level Locking (<code>SELECT ... FOR UPDATE</code>) and Row Level Security (RLS).</li>
+  <li><strong><code>pgvector</code> Extension:</strong> Direct vector similarity search for the <strong>"More like this"</strong> discovery grid.</li>
+  <li><strong>Supabase Realtime:</strong> WebSocket CDC (Change Data Capture) streaming job completion to Flutter and Next.js in <strong><50ms</strong> without client polling.</li>
+  <li><strong>Supabase Storage:</strong> Two-tier S3-compatible buckets (<code>previews</code> CDN bucket for WebP; <code>masters</code> private bucket for 4K PNGs).</li>
+  <li><strong>Asynchronous Queue:</strong></li>
+  <li>Fast HTTP 202 ACK on generation requests. Background GPU workers process jobs asynchronously; client UI remains completely non-blocking.</li>
+</ul>
+<hr class="divider">
+<h2>7. Security, Licensing & Anti-Abuse: 7 Core Protections</h2>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>Attack Vector / Loophole</th>
+      <th>Risk Description</th>
+      <th>Production Solution</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>1. Sybil Royalty Farming</strong></td>
+      <td>Scripting 500 fake accounts using free signup credits to remix an author's prompt and extract cash.</td>
+      <td><strong>Purchased-Credit Gating</strong>. Royalties are strictly credited only if payment is deducted from <code>purchased_balance</code>. Free/promo credits yield 0 cash royalty.</td>
+    </tr>
+    <tr>
+      <td><strong>2. Double-Spend Race</strong></td>
+      <td>Rapid concurrent taps attempting to spend 3 credits on 10 parallel jobs.</td>
+      <td><strong>PostgreSQL ACID Lock (<code>SELECT ... FOR UPDATE</code>) + Redis Distributed Lock</strong>. Concurrent calls queue or reject safely.</td>
+    </tr>
+    <tr>
+      <td><strong>3. Re-Download Overcharge</strong></td>
+      <td>Users getting recharged 2 credits when re-downloading an already unlocked image after link expiry.</td>
+      <td><strong>Idempotent Unlock Check</strong>. Backend checks <code>job.is_download_unlocked</code>; if True, skips deduction and serves signed URL for free.</td>
+    </tr>
+    <tr>
+      <td><strong>4. Expired Mobile Downloads</strong></td>
+      <td>60-second signed URL expiring mid-transfer on slow 3G/4G connections for 20MB files.</td>
+      <td><strong>15-Minute (900s) Signed URL TTL</strong>. Sufficient window for large mobile transfers via Supabase Storage without exposing persistent links.</td>
+    </tr>
+    <tr>
+      <td><strong>5. Commercial Licensing Risk</strong></td>
+      <td>Using non-commercial research models (e.g. InsightFace) in a commercial SaaS app.</td>
+      <td><strong>Permissive Licensing</strong>. Using <strong>InstantID (Apache 2.0)</strong> and <strong>ReActor / CodeFormer</strong> for 100% legal commercial compliance.</td>
+    </tr>
+    <tr>
+      <td><strong>6. EXIF Metadata Leak</strong></td>
+      <td>Diffusion models embedding raw prompts inside image metadata headers.</td>
+      <td><strong>Automated EXIF Purge</strong>. Backend strips all metadata (<code>exif=b""</code>) before writing public previews.</td>
+    </tr>
+    <tr>
+      <td><strong>7. Platform DRM Security</strong></td>
+      <td>Preventing screenshots and prompt theft across platforms.</td>
+      <td><strong>Native Mobile DRM</strong> (<code>FLAG_SECURE</code> on Android, <code>UIScreen.capturedDidChangeNotification</code> on iOS) + Canvas DOM obfuscation on Next.js Web.</td>
+    </tr>
+  </tbody>
+</table>
+<hr class="divider">
+<h2>8. Technical Challenges, System Limitations & Mitigations</h2>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>Key Challenge / Limitation</th>
+      <th>Impact & Risk</th>
+      <th>Engineering Mitigation</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>1. GPU Cold Starts (Serverless Latency)</strong></td>
+      <td>Model weights (12–24GB) take 15–25s to load when spinning up a new GPU worker during traffic spikes.</td>
+      <td>Min-concurrency warm instance during peak hours + NVMe cached weights + instant 5s failover to Pollinations fallback.</td>
+    </tr>
+    <tr>
+      <td><strong>2. Mobile Network 4K Downloads</strong></td>
+      <td>20MB 4K PNG exports risk network timeout on spotty 3G/4G cellular connections.</td>
+      <td>15-Minute (900s) Signed URL TTL + resumable chunked downloads + free idempotent re-downloads via Supabase Storage.</td>
+    </tr>
+    <tr>
+      <td><strong>3. Web Browser DRM Constraints</strong></td>
+      <td>Unlike mobile (<code>FLAG_SECURE</code>), browsers cannot 100% block external phone cameras or OS screen capture.</td>
+      <td>Master prompt ciphers strictly kept server-side; Next.js uses Canvas DOM obfuscation & right-click blocks; only chips exposed.</td>
+    </tr>
+    <tr>
+      <td><strong>4. GPU Cost Overrun on Viral Prompts</strong></td>
+      <td>A viral prompt could trigger thousands of concurrent remix calls, risking runaway serverless compute bills.</td>
+      <td>Token-Bucket rate limiting (max 5 active jobs/user) + global auto-scale cap (max 20 workers) + HTTP 202 queue buffering.</td>
+    </tr>
+    <tr>
+      <td><strong>5. Third-Party LLM Quota Bottlenecks</strong></td>
+      <td>Gemini 1.5 Flash API could hit rate limit quotas during platform-wide viral marketing campaigns.</td>
+      <td>In-memory Redis response caching (1hr TTL) + graceful local fallback to pre-computed style templates.</td>
+    </tr>
+    <tr>
+      <td><strong>6. Content Moderation & Abuse</strong></td>
+      <td>Malicious users attempting prompt jailbreaks, NSFW generation, or deepfakes.</td>
+      <td>Multi-tier moderation: Gemini safety settings + server-side keyword blocklist + GPU post-inference safety filters.</td>
+    </tr>
+  </tbody>
+</table>
+<hr class="divider">
+<h2>9. Implementation Roadmap (8 Weeks / 4 Sprints)</h2>
+<table class="word-table">
+  <thead>
+    <tr>
+      <th>Sprint</th>
+      <th>Focus Area</th>
+      <th>Key Deliverables</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Sprint 1 (Weeks 1–2)</strong></td>
+      <td>Core DRM, Supabase & Paywall</td>
+      <td>• Supabase PostgreSQL Schema, RLS & Storage Buckets; • In-App Cloud Library; • 2-Credit Idempotent Download Paywall; • 15-Minute Supabase Signed URLs; • Stripe Webhook (<code>POST /api/v1/wallet/stripe-webhook</code>); • Mobile <code>FLAG_SECURE</code> copy protection</td>
+    </tr>
+    <tr>
+      <td><strong>Sprint 2 (Weeks 3–4)</strong></td>
+      <td>AI Engine & Pricing</td>
+      <td>• Complexity Tokenizer & Range Clamping algorithm (<code>round_half_up</code>); • Gemini 1.5 Flash Magic Expander; • Self-hosted T4 GPU worker with Pollinations fallback; • Next.js 15 Web Studio Scaffold</td>
+    </tr>
+    <tr>
+      <td><strong>Sprint 3 (Weeks 5–6)</strong></td>
+      <td>Marketplace & Royalties</td>
+      <td>• Server-Side AES-256 Prompt DRM; • Anti-Sybil Royalty Transaction Ledger (<code>purchased_balance</code> gating); • Explore Masonry Grid & 1-Tap Remix drawer; • Supabase <code>pgvector</code> semantic discovery</td>
+    </tr>
+    <tr>
+      <td><strong>Sprint 4 (Weeks 7–8)</strong></td>
+      <td>Video Suite & Hardening</td>
+      <td>• LivePortrait neural face motion pipeline; • InstantID face swap pipeline (Apache 2.0); • Next.js 15 SSR Production Build; • Automated CI/CD pipelines & production launch</td>
+    </tr>
+  </tbody>
+</table>
+<hr class="divider">
+<h2>10. Executive Decision Points For Sign-Off</h2>
+<p>To move into Sprint 1 development, the following 3 items are ready for alignment:</p>
+<ol class="ordered-list">
+  <li><strong>Royalty Split Model:</strong> Approval of <strong>Model 1 (Tiered Gamification)</strong> vs. <strong>Model 2 (Flat Split)</strong> as initial default setting (with Anti-Sybil purchased credit gating).</li>
+  <li><strong>Download Paywall Pricing:</strong> Confirmation of <strong>flat 2 Credits ($0.20)</strong> for master unwatermarked file downloads (with free idempotent re-downloading).</li>
+  <li><strong>Sprint 1 Kickoff:</strong> Approval of core architecture (Flutter + Next.js 15 + FastAPI + Supabase) to begin implementation of the database schemas, wallet ledger, Stripe webhook, and DRM download paywall.</li>
+</ol>
+</body>
+</html>
