@@ -1,6 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 
+class LLMExecutionError(Exception):
+    """Raised when an LLM provider fails to generate or returns an unparseable response."""
+    pass
+
 class ILLMClient(ABC):
     @abstractmethod
     async def expand_prompt(self, raw_prompt: str, starter_chip: Optional[str] = None) -> Dict[str, Any]:

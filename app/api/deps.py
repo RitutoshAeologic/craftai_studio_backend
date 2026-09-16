@@ -37,11 +37,9 @@ def get_diffusion_gateway() -> IDiffusionGateway:
 def get_huggingface_client() -> HuggingFaceClient:
     return HuggingFaceClient()
 
-def get_prompt_service(
-    groq_client: ILLMClient = Depends(get_groq_client),
-    gemini_client: ILLMClient = Depends(get_gemini_llm_client)
-) -> PromptService:
-    return PromptService(groq_client=groq_client, gemini_client=gemini_client)
+@lru_cache()
+def get_prompt_service() -> PromptService:
+    return PromptService()
 
 def get_vision_service(
     vision_client: IVisionClient = Depends(get_vision_client)
