@@ -2,9 +2,9 @@
 
 > **Target Audience:** Next.js 15 Web Engineering Team  
 > **Backend Architecture:** FastAPI (Python 3.9+) + Supabase (PostgreSQL, Storage, Auth)  
-> **Backend Git Branch:** `feature/multi-llm-configurable-gateway` (Base: `feature/production-clean-architecture`)  
+> **Backend Git Branch:** `feature/structured-prompt-engine` (Includes all gateway fixes + Multi-Model Structured Engine)  
 > **Backend Repository:** `git@github.com:RitutoshAeologic/craftai_studio_backend.git`  
-> **PR Link:** [Create PR on GitHub](https://github.com/RitutoshAeologic/craftai_studio_backend/pull/new/feature/multi-llm-configurable-gateway)  
+> **PR Link:** [Create PR on GitHub](https://github.com/RitutoshAeologic/craftai_studio_backend/pull/new/feature/structured-prompt-engine)  
 > **Mobile Parity:** Flutter Mobile App (iOS / Android)  
 > **Local Base URL (Recommended):** `http://127.0.0.1:8000/api/v1` *(or root `http://127.0.0.1:8000`)*  
 > **Public HTTPS Tunnel (Remote Web Testing):** `https://craftwork-gizmo-engraved.ngrok-free.dev/api/v1` *(Header: `ngrok-skip-browser-warning: true`)*  
