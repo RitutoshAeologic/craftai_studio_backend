@@ -154,6 +154,46 @@ Content-Type: application/json
 }
 ```
 
+#### 2.4.1 Multi-Model Structured Prompt Engine (Web Implementation Guide)
+
+The prompt expansion engine now returns both the synthesized **`master_prompt`** and a detailed **`structured_metadata`** object (Visual Director breakdown).
+
+##### A. TypeScript Interfaces for Web:
+```typescript
+export interface StructuredPromptMetadata {
+  subject: string;             // Central character/entity description
+  environment: string;         // Background, atmospheric setting
+  lighting: string;            // Cinematic lighting, rim lights, shadow dynamics
+  camera_optics: string;       // Lens focal length, aperture (e.g. f/1.4), film grain
+  art_style: string;           // Overall artistic genre or rendering engine
+  avoid: string[];             // Negative visual concepts to suppress
+  preserved_elements: string[];// Identity features, faces, or elements locked from modification
+}
+
+export interface PromptExpandResponse {
+  master_prompt: string;
+  negative_prompt: string;
+  complexity_score: number;
+  model_used: string;
+  structured_metadata?: StructuredPromptMetadata;
+}
+```
+
+##### B. How the Next.js Web UI Should Utilize This:
+1. **Interactive Prompt Inspector (Studio UI Parity):**
+   - In Studio, clicking the Inspector icon (`Icons.manage_search`) opens a modal displaying:
+     - **What You Typed:** The user's clean draft.
+     - **AI Visual Breakdown:** Visual director badges for `Subject`, `Environment`, `Lighting`, `Camera Optics`, `Style`.
+     - **Preserved Identity Badges:** Green locked pills for anything in `preserved_elements` (e.g., `🔒 Authentic Facial Structure Locked`).
+2. **Passing to Generation Dispatch (`/generation/dispatch`):**
+   - Forward `structured_metadata` in the POST body to `/generation/dispatch`.
+   - The backend's `PromptCompiler` automatically compiles model-specific prompts:
+     - **FLUX.1-schnell:** Compiles into a rich natural-language visual narrative (ideal for FLUX text encoders).
+     - **SDXL:** Compiles into weighted bracketed tags (`(35mm film grain:1.2), ...`).
+3. **Identity & Facial Preservation:**
+   - When users enter prompts like *"1985 Bollywood style and keep my face preserved"*, the LLM extracts the identity traits into `preserved_elements`.
+   - The Conversational Chat Copilot (`/chat-delta`) locks these elements, preventing subsequent refinement turns from altering facial features.
+
 ---
 
 ### 2.5 Prompt Chat Copilot (Delta Compiler)
