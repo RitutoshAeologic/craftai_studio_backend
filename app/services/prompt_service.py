@@ -62,7 +62,8 @@ class PromptService:
                     master_prompt=res["master_prompt"],
                     negative_prompt=res["negative_prompt"],
                     complexity_score=complexity_score,
-                    model_used=res["model_used"]
+                    model_used=res["model_used"],
+                    structured_metadata=res.get("structured_metadata")
                 )
             except Exception as e:
                 last_error = e
@@ -99,7 +100,8 @@ class PromptService:
                         removed=diff_data.get("removed", [])
                     ),
                     suggested_chips=res.get("suggested_chips", []),
-                    model_used=res["model_used"]
+                    model_used=res["model_used"],
+                    structured_metadata=res.get("structured_metadata")
                 )
             except Exception as e:
                 last_error = e

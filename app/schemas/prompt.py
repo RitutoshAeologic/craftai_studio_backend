@@ -8,11 +8,21 @@ class PromptExpandRequest(BaseModel):
     aspect_ratio: Optional[str] = Field("1:1", description="Target aspect ratio")
     ai_model: Optional[str] = Field(None, description="Optional prompt engine: gemini, groq, openai, claude, local")
 
+class StructuredPromptMetadata(BaseModel):
+    subject: Optional[str] = Field(None, description="Primary subject entity, action, and key details")
+    environment: Optional[str] = Field(None, description="Scene backdrop, location, atmosphere, and weather")
+    lighting: Optional[str] = Field(None, description="Key light, rim light, ambient color, and shadow tones")
+    camera_optics: Optional[str] = Field(None, description="Focal length, shot angle, aperture, and depth of field")
+    art_style: Optional[str] = Field(None, description="Aesthetic style, genre, or photographic medium")
+    avoid: List[str] = Field(default_factory=list, description="Negative filtering tokens to eliminate")
+    preserved_elements: List[str] = Field(default_factory=list, description="Locked attributes across multi-turn chat edits")
+
 class PromptExpandResponse(BaseModel):
     master_prompt: str
     negative_prompt: str
     complexity_score: int
     model_used: str
+    structured_metadata: Optional[StructuredPromptMetadata] = None
 
 class PromptDeltaRequest(BaseModel):
     session_id: Optional[str] = Field(
@@ -33,6 +43,7 @@ class PromptDeltaResponse(BaseModel):
     diff: PromptDeltaDiff
     suggested_chips: List[str] = Field(default_factory=list)
     model_used: str
+    structured_metadata: Optional[StructuredPromptMetadata] = None
 
 class LLMConfigResponse(BaseModel):
     active_provider: str

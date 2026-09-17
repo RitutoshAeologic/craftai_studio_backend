@@ -3,6 +3,8 @@ from pydantic import BaseModel, Field
 
 class GenerationDispatchRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=4000, description="Compiled generation prompt")
+    negative_prompt: Optional[str] = Field(None, description="Negative filtering prompt")
+    structured_metadata: Optional[dict] = Field(None, description="Optional structured visual metadata")
     character_id: Optional[str] = Field(None, description="Consistent character entity ID")
     face_reference_urls: Optional[List[str]] = Field(None, description="Face lock reference photo URLs")
     width: Optional[int] = Field(1024, ge=512, le=2048)

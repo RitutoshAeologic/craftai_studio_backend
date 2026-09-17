@@ -19,7 +19,7 @@ class ClaudeLLMClient(ILLMClient):
             "Convert user input into a rich master diffusion prompt. "
             "CRITICAL RULE: If the prompt starts with or contains 'Edit image1 as follows: ', "
             "you MUST preserve 'Edit image1 as follows: ' at the exact start of 'master_prompt'. "
-            "Output valid JSON ONLY with keys: 'master_prompt', 'negative_prompt', 'complexity_score' (1-10)."
+            "Output valid JSON ONLY with keys: 'master_prompt', 'negative_prompt', 'complexity_score', 'structured_metadata' (object with 'subject', 'environment', 'lighting', 'camera_optics', 'art_style', 'avoid' array, 'preserved_elements' array)."
         )
         user_message = f"Expand this prompt:{chip_context} '{raw_prompt}'"
 
@@ -57,6 +57,8 @@ class ClaudeLLMClient(ILLMClient):
                     "master_prompt": master,
                     "negative_prompt": content.get("negative_prompt", "blurry, low quality, distorted"),
                     "complexity_score": int(content.get("complexity_score", 3)),
+                    "structured_metadata": content.get("structured_metadata", {"subject": raw_prompt, "environment": starter_chip or "scene", "lighting": "cinematic", "camera_optics": "35mm", "art_style": "photorealistic", "avoid": ["blurry"], "preserved_elements": []}),
+                    "structured_metadata": content.get("structured_metadata", {"subject": base_prompt, "environment": user_instruction, "lighting": "cinematic", "camera_optics": "35mm", "art_style": "cinematic", "avoid": ["blurry"], "preserved_elements": []}),
                     "model_used": f"anthropic/{self.model}"
                 }
         except Exception as e:
@@ -68,7 +70,7 @@ class ClaudeLLMClient(ILLMClient):
             "You are an AI prompt copilot. Merge instruction into the base prompt while preserving locked subjects. "
             "CRITICAL RULE: If base_prompt starts with 'Edit image1 as follows: ', "
             "preserve 'Edit image1 as follows: ' at the start of 'compiled_prompt'. "
-            "Output valid JSON ONLY with keys: 'compiled_prompt', 'diff', 'suggested_chips'."
+            "Output valid JSON ONLY with keys: 'compiled_prompt', 'diff', 'suggested_chips', 'structured_metadata'."
         )
         user_message = f"Base prompt: '{base_prompt}'\nChange instruction: '{user_instruction}'"
 
@@ -110,6 +112,8 @@ class ClaudeLLMClient(ILLMClient):
                         "removed": diff_obj.get("removed", [])
                     },
                     "suggested_chips": content.get("suggested_chips", ["Add Rim Light", "35mm Grain", "Bokeh Background"]),
+                    "structured_metadata": content.get("structured_metadata", {"subject": raw_prompt, "environment": starter_chip or "scene", "lighting": "cinematic", "camera_optics": "35mm", "art_style": "photorealistic", "avoid": ["blurry"], "preserved_elements": []}),
+                    "structured_metadata": content.get("structured_metadata", {"subject": base_prompt, "environment": user_instruction, "lighting": "cinematic", "camera_optics": "35mm", "art_style": "cinematic", "avoid": ["blurry"], "preserved_elements": []}),
                     "model_used": f"anthropic/{self.model}"
                 }
         except Exception as e:

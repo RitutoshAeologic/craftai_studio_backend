@@ -1,3 +1,4 @@
+from app.core.prompt_compiler import PromptCompiler
 import os
 import re
 import uuid
@@ -42,7 +43,16 @@ class GenerationService:
     async def dispatch(self, req: GenerationDispatchRequest, user_id: Optional[str] = None) -> GenerationDispatchResponse:
         task_id = f"gen_{os.urandom(4).hex()}"
         has_face_lock = bool(req.face_reference_urls and len(req.face_reference_urls) > 0) or bool(req.character_id)
-        effective_prompt = req.prompt.strip()
+        
+        # Apply Visual Director model compilation for target engine
+        compiled_target = PromptCompiler.compile_for_target_model(
+            model=req.model or "flux",
+            metadata=req.structured_metadata,
+            fallback_prompt=req.prompt.strip(),
+            existing_negative_prompt=req.negative_prompt or ""
+        )
+        effective_prompt = compiled_target.get("prompt", req.prompt.strip())
+        effective_negative = compiled_target.get("negative_prompt", "")
 
         # ── 1. Multimodal Facial Identity Conditioning ────────────────────────
         extracted_face_tokens = None
