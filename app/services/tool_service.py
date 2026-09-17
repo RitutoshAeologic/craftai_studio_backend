@@ -1,3 +1,4 @@
+import asyncio
 import os
 import uuid
 import httpx
@@ -24,25 +25,27 @@ class ToolService:
                     raise ValueError(f"Failed to fetch image: HTTP {resp.status_code}")
                 input_bytes = resp.content
 
-            # CPU rembg cutout
-            output_bytes = rembg.remove(input_bytes)
+            # Non-blocking CPU rembg cutout in worker thread
+            output_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
 
             # Upload transparent PNG to Supabase
             admin = get_supabase_admin()
             file_path = f"transparent_cutouts/{uuid.uuid4().hex}.png"
-            admin.storage.from_("user_generations").upload(
+            await asyncio.to_thread(
+                admin.storage.from_("user_generations").upload,
                 file_path,
                 output_bytes,
                 {"content-type": "image/png"}
             )
             output_url = admin.storage.from_("user_generations").get_public_url(file_path)
 
-            self.task_store.save_task(task_id, {
-                "status": "completed",
-                "progress": 100,
-                "output_url": output_url,
-                "tier": "Zero-Token CPU Tool"
-            })
+            if self.task_store:
+                self.task_store.save_task(task_id, {
+                    "status": "completed",
+                    "progress": 100,
+                    "output_url": output_url,
+                    "tier": "Zero-Token CPU Tool"
+                })
 
             logger.info(f"[Tool: Background Removal] Cutout ready: {output_url}")
             return RemoveBackgroundResponse(

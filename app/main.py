@@ -79,6 +79,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 # Master API v1 Router Registration
 app.include_router(api_v1_router, prefix="/api/v1")
+app.include_router(api_v1_router, prefix="")  # Support root prefix calls from clients
 
 @app.get("/health", tags=["Health"])
 def health_check():
