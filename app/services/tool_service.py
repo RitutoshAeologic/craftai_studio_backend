@@ -155,26 +155,40 @@ class ToolService:
         """Removes background from image on local CPU with rembg (Zero GPU, Zero Tokens, Zero Cost)."""
         task_id = f"tool_rmbg_{uuid.uuid4().hex[:8]}"
         try:
-            logger.info(f"[Tool: Background Removal] Processing: {req.image_url}")
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(req.image_url)
-                if resp.status_code != 200:
-                    raise ValueError(f"Failed to fetch image: HTTP {resp.status_code}")
-                input_bytes = resp.content
+            logger.info(f"[Tool: Background Removal] Processing: {req.image_url[:80]}...")
+            if req.image_url.startswith("data:"):
+                # Handle base64 data URL
+                _, encoded = req.image_url.split(",", 1)
+                input_bytes = base64.b64decode(encoded)
+            else:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(req.image_url)
+                    if resp.status_code != 200:
+                        raise ValueError(f"Failed to fetch image: HTTP {resp.status_code}")
+                    input_bytes = resp.content
 
             # Non-blocking CPU rembg cutout in worker thread
             output_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
 
-            # Upload transparent PNG to Supabase
-            admin = get_supabase_admin()
-            file_path = f"transparent_cutouts/{uuid.uuid4().hex}.png"
-            await asyncio.to_thread(
-                admin.storage.from_("user_generations").upload,
-                file_path,
-                output_bytes,
-                {"content-type": "image/png"}
-            )
-            output_url = admin.storage.from_("user_generations").get_public_url(file_path)
+            output_url = None
+            try:
+                # Upload transparent PNG to Supabase
+                admin = get_supabase_admin()
+                file_path = f"transparent_cutouts/{uuid.uuid4().hex}.png"
+                await asyncio.to_thread(
+                    admin.storage.from_("user_generations").upload,
+                    file_path,
+                    output_bytes,
+                    {"content-type": "image/png"}
+                )
+                output_url = admin.storage.from_("user_generations").get_public_url(file_path)
+            except Exception as up_err:
+                logger.warning(f"[Tool: Background Removal] Supabase storage upload failed ({up_err}), falling back to direct base64 data URL")
+
+            if not output_url:
+                # Direct lossless base64 PNG data URL fallback (guarantees 100% offline & dev reliability)
+                b64_str = base64.b64encode(output_bytes).decode("utf-8")
+                output_url = f"data:image/png;base64,{b64_str}"
 
             if self.task_store:
                 self.task_store.save_task(task_id, {
@@ -184,7 +198,7 @@ class ToolService:
                     "tier": "Zero-Token CPU Tool"
                 })
 
-            logger.info(f"[Tool: Background Removal] Cutout ready: {output_url}")
+            logger.info(f"[Tool: Background Removal] Cutout ready (output length={len(output_url)})")
             return RemoveBackgroundResponse(
                 task_id=task_id,
                 status="completed",
