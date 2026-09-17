@@ -2,7 +2,6 @@ from typing import Dict, Any, List, Optional
 from app.infrastructure.clients.base import ILLMClient
 from app.infrastructure.clients.gemini_llm_client import GeminiLLMClient
 from app.infrastructure.clients.groq_client import GroqClient
-from app.infrastructure.clients.deepseek_client import DeepSeekLLMClient
 from app.infrastructure.clients.local_llm_client import LocalOfflineLLMClient
 from app.infrastructure.clients.openai_client import OpenAILLMClient
 from app.infrastructure.clients.claude_client import ClaudeLLMClient
@@ -21,36 +20,31 @@ class LLMClientFactory:
         cfg = config or {}
         name = (provider_or_model or "").strip().lower()
 
-        # 1. DeepSeek Official
-        if "deepseek" in name:
-            model = cfg.get("deepseek_model") or getattr(settings, "DEEPSEEK_MODEL", "deepseek-chat")
-            return DeepSeekLLMClient(model=model)
-
-        # 2. Gemini
+        # 1. Gemini
         if "gemini" in name:
             model = cfg.get("gemini_model") or getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
             if "-" in name and name != "gemini":
                 model = provider_or_model
             return GeminiLLMClient(model=model)
 
-        # 3. Groq LPU
+        # 2. Groq LPU
         if "groq" in name or "qwen" in name or "llama" in name:
             model = cfg.get("groq_model") or getattr(settings, "GROQ_MODEL", "qwen/qwen3.8-27b")
             if "/" in name or "-" in name and name != "groq":
                 model = provider_or_model
             return GroqClient(model=model)
 
-        # 4. OpenAI / ChatGPT
+        # 3. OpenAI / ChatGPT
         if "openai" in name or "gpt" in name:
             model = cfg.get("openai_model") or getattr(settings, "OPENAI_MODEL", "gpt-4o-mini")
             return OpenAILLMClient(model=model)
 
-        # 5. Anthropic Claude
+        # 4. Anthropic Claude
         if "claude" in name or "anthropic" in name:
             model = cfg.get("claude_model") or getattr(settings, "CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
             return ClaudeLLMClient(model=model)
 
-        # 6. Local Deterministic Offline Engine
+        # 5. Local Deterministic Offline Engine
         if "local" in name or "offline" in name:
             return LocalOfflineLLMClient()
 
