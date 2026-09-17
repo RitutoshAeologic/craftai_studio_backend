@@ -1,3 +1,4 @@
+import uuid
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
@@ -14,7 +15,10 @@ class PromptExpandResponse(BaseModel):
     model_used: str
 
 class PromptDeltaRequest(BaseModel):
-    session_id: str = Field(..., description="Unique conversational copilot session ID")
+    session_id: Optional[str] = Field(
+        default_factory=lambda: f"sess_{uuid.uuid4().hex[:12]}",
+        description="Unique conversational copilot session ID (auto-generated if omitted)"
+    )
     turn_count: int = Field(default=1, ge=1, le=10, description="Number of conversational refinement turns")
     base_prompt: str = Field(..., min_length=1, description="Current master prompt to refine")
     user_instruction: str = Field(..., min_length=1, description="Natural language delta change instruction")
