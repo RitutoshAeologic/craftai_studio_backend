@@ -1,4 +1,5 @@
 import os
+import asyncio
 from typing import Dict, Any, Optional
 import google.generativeai as genai
 from app.core.config import settings
@@ -14,8 +15,8 @@ class GeminiLLMClient(ILLMClient):
             genai.configure(api_key=self.api_key)
         self._model = genai.GenerativeModel(self.model_name)
 
-    def _generate(self, prompt_input: str) -> str:
-        """Attempts generation with configured model, falling back to gemini-flash-latest if 429 quota is hit."""
+    def _sync_generate(self, prompt_input: str) -> str:
+        """Runs the synchronous Google AI Studio SDK call."""
         try:
             resp = self._model.generate_content(
                 prompt_input,
@@ -34,6 +35,19 @@ class GeminiLLMClient(ILLMClient):
                 return resp.text
             raise e
 
+    async def _safe_generate(self, prompt_input: str, timeout: float = 4.5) -> str:
+        """Executes in threadpool without blocking FastAPI event loop, with strict timeout."""
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._sync_generate, prompt_input),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Gemini {self.model_name} timed out after {timeout}s.")
+            raise LLMExecutionError(f"Gemini timed out after {timeout}s")
+        except Exception as e:
+            raise LLMExecutionError(str(e))
+
     async def expand_prompt(self, raw_prompt: str, starter_chip: Optional[str] = None) -> Dict[str, Any]:
         chip_context = f" Preset theme: {starter_chip}." if starter_chip else ""
         system_prompt = (
@@ -49,26 +63,22 @@ class GeminiLLMClient(ILLMClient):
         if not self.api_key or self.api_key.startswith("your-"):
             raise LLMExecutionError("Gemini API key is not configured.")
 
-        try:
-            prompt_input = system_prompt + "\n\n" + user_message
-            raw_text = self._generate(prompt_input)
-            content = clean_and_parse_llm_json(raw_text)
-            if not content or "master_prompt" not in content:
-                raise LLMExecutionError(f"Gemini returned invalid or empty JSON: {raw_text[:100]}")
+        prompt_input = system_prompt + "\n\n" + user_message
+        raw_text = await self._safe_generate(prompt_input, timeout=4.5)
+        content = clean_and_parse_llm_json(raw_text)
+        if not content or "master_prompt" not in content:
+            raise LLMExecutionError(f"Gemini returned invalid or empty JSON: {raw_text[:100]}")
 
-            master = content.get("master_prompt", raw_prompt)
-            if raw_prompt.strip().startswith("Edit image1 as follows: ") and not master.strip().startswith("Edit image1 as follows: "):
-                master = f"Edit image1 as follows: {master}"
+        master = content.get("master_prompt", raw_prompt)
+        if raw_prompt.strip().startswith("Edit image1 as follows: ") and not master.strip().startswith("Edit image1 as follows: "):
+            master = f"Edit image1 as follows: {master}"
 
-            return {
-                "master_prompt": master,
-                "negative_prompt": content.get("negative_prompt", "blurry, low quality, distorted, extra limbs, watermark"),
-                "complexity_score": int(content.get("complexity_score", 3)),
-                "model_used": f"google/{self.model_name}"
-            }
-        except Exception as e:
-            logger.error(f"Gemini LLM expansion error: {e}")
-            raise LLMExecutionError(f"Gemini error: {e}")
+        return {
+            "master_prompt": master,
+            "negative_prompt": content.get("negative_prompt", "blurry, low quality, distorted, extra limbs, watermark"),
+            "complexity_score": int(content.get("complexity_score", 3)),
+            "model_used": f"google/{self.model_name}"
+        }
 
     async def compile_delta(self, base_prompt: str, user_instruction: str) -> Dict[str, Any]:
         system_prompt = (
@@ -85,27 +95,23 @@ class GeminiLLMClient(ILLMClient):
         if not self.api_key or self.api_key.startswith("your-"):
             raise LLMExecutionError("Gemini API key is not configured.")
 
-        try:
-            prompt_input = system_prompt + "\n\n" + user_message
-            raw_text = self._generate(prompt_input)
-            content = clean_and_parse_llm_json(raw_text)
-            if not content or "compiled_prompt" not in content:
-                raise LLMExecutionError(f"Gemini delta returned invalid JSON: {raw_text[:100]}")
+        prompt_input = system_prompt + "\n\n" + user_message
+        raw_text = await self._safe_generate(prompt_input, timeout=4.5)
+        content = clean_and_parse_llm_json(raw_text)
+        if not content or "compiled_prompt" not in content:
+            raise LLMExecutionError(f"Gemini delta returned invalid JSON: {raw_text[:100]}")
 
-            compiled = content.get("compiled_prompt", f"{base_prompt}, {user_instruction}")
-            if base_prompt.strip().startswith("Edit image1 as follows: ") and not compiled.strip().startswith("Edit image1 as follows: "):
-                compiled = f"Edit image1 as follows: {compiled}"
+        compiled = content.get("compiled_prompt", f"{base_prompt}, {user_instruction}")
+        if base_prompt.strip().startswith("Edit image1 as follows: ") and not compiled.strip().startswith("Edit image1 as follows: "):
+            compiled = f"Edit image1 as follows: {compiled}"
 
-            diff_obj = content.get("diff", {})
-            return {
-                "compiled_prompt": compiled,
-                "diff": {
-                    "added": diff_obj.get("added", [user_instruction]),
-                    "removed": diff_obj.get("removed", [])
-                },
-                "suggested_chips": content.get("suggested_chips", ["Add Rim Light", "35mm Grain", "Bokeh Background"]),
-                "model_used": f"google/{self.model_name}"
-            }
-        except Exception as e:
-            logger.error(f"Gemini LLM delta error: {e}")
-            raise LLMExecutionError(f"Gemini delta error: {e}")
+        diff_obj = content.get("diff", {})
+        return {
+            "compiled_prompt": compiled,
+            "diff": {
+                "added": diff_obj.get("added", [user_instruction]),
+                "removed": diff_obj.get("removed", [])
+            },
+            "suggested_chips": content.get("suggested_chips", ["Add Rim Light", "35mm Grain", "Bokeh Background"]),
+            "model_used": f"google/{self.model_name}"
+        }
