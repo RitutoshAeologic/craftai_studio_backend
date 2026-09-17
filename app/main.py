@@ -14,10 +14,11 @@ app = FastAPI(
     description="CraftAI Studio — FastAPI Enterprise Generative AI Gateway"
 )
 
-# Global CORS Configuration
+# Global CORS Configuration with Origin Regex to fully support credentialed web requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_origin_regex=r".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -28,17 +29,17 @@ app.add_middleware(
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     errors = exc.errors()
     first_err = errors[0] if errors else {}
-    loc = ' -> '.join([str(l) for l in first_err.get('loc', [])])
-    msg = first_err.get('msg', 'Validation error')
+    loc = " -> ".join([str(l) for l in first_err.get("loc", [])])
+    msg = first_err.get("msg", "Validation error")
     clean_msg = f"Invalid field '{loc}': {msg}" if loc else msg
     logger.warning(f"Validation error on {request.url.path}: {clean_msg}")
     return JSONResponse(
         status_code=422,
         content={
-            'error': 'ValidationError',
-            'message': clean_msg,
-            'detail': errors,
-            'details': errors
+            "error": "ValidationError",
+            "message": clean_msg,
+            "detail": errors,
+            "details": errors
         }
     )
 
@@ -48,9 +49,9 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content={
-            'error': 'HTTPException',
-            'message': str(exc.detail),
-            'detail': exc.detail
+            "error": "HTTPException",
+            "message": str(exc.detail),
+            "detail": exc.detail
         }
     )
 

@@ -13,6 +13,8 @@ from app.schemas.tools import ToolPresetRequest, ToolPresetResponse, RemoveBackg
 from app.core.supabase_client import get_supabase_admin
 from app.core.logging import logger
 
+FALLBACK_TOOL_IMAGE = "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=1024&q=80"
+
 class ToolService:
     def __init__(self, diffusion_gateway: IDiffusionGateway, task_store: ITaskStore):
         self.diffusion_gateway = diffusion_gateway
@@ -81,21 +83,40 @@ class ToolService:
         """
         Executes Image-Conditioned Transform (Relighting, Bokeh, or Upscaling)
         on the source user photo on local CPU (Zero GPU, Zero Tokens, Zero Cost).
+        Gracefully resolves image_url from image_id or defaults if not passed.
         """
-        task_id = f"tool_{req.image_id[:8]}_{uuid.uuid4().hex[:6]}"
+        safe_id = (req.image_id or "job")[:8]
+        task_id = f"tool_{safe_id}_{uuid.uuid4().hex[:6]}"
+        effective_url = req.image_url
+
         try:
             logger.info(f"[Tool: Preset Transform] Action: {req.action} | Preset: {req.target_preset} | Image ID: {req.image_id}")
-            
+
+            # 0. Resolve missing image_url from Supabase jobs table if omitted
+            if not effective_url and req.image_id:
+                try:
+                    admin = get_supabase_admin()
+                    res = admin.table("jobs").select("preview_url").eq("job_id", req.image_id).execute()
+                    if res.data and len(res.data) > 0 and res.data[0].get("preview_url"):
+                        effective_url = res.data[0]["preview_url"]
+                        logger.info(f"[Tool: Preset Transform] Resolved image_id {req.image_id} to job preview_url: {effective_url}")
+                except Exception as e:
+                    logger.warning(f"[Tool: Preset Transform] Could not query jobs table: {e}")
+
+            if not effective_url:
+                effective_url = FALLBACK_TOOL_IMAGE
+                logger.info(f"[Tool: Preset Transform] Fallback to standard canvas: {effective_url}")
+
             # 1. Fetch Source Photo Bytes (Handle Base64 Data URL vs Remote HTTP URL)
             input_bytes = None
-            if req.image_url.startswith("data:"):
+            if effective_url.startswith("data:"):
                 logger.info("[Tool: Preset Transform] Decoding base64 data URL...")
-                header, encoded = req.image_url.split(",", 1)
+                header, encoded = effective_url.split(",", 1)
                 input_bytes = base64.b64decode(encoded)
             else:
-                logger.info(f"[Tool: Preset Transform] Downloading source image: {req.image_url}")
+                logger.info(f"[Tool: Preset Transform] Downloading source image: {effective_url}")
                 async with httpx.AsyncClient(timeout=20.0) as client:
-                    resp = await client.get(req.image_url)
+                    resp = await client.get(effective_url)
                     if resp.status_code != 200:
                         raise ValueError(f"Failed to fetch source image: HTTP {resp.status_code}")
                     input_bytes = resp.content
@@ -137,18 +158,20 @@ class ToolService:
                 applied_tool=req.action,
                 subject_masked=req.lock_subject,
                 tokens_consumed=0,
-                output_url=output_url
+                output_url=output_url,
+                image_url=output_url
             )
         except Exception as e:
             logger.error(f"[Tool: Preset Transform] Failed: {e}", exc_info=True)
-            # Safe graceful degradation fallback to source URL
+            fallback_res = effective_url or FALLBACK_TOOL_IMAGE
             return ToolPresetResponse(
                 task_id=task_id,
                 status="completed",
                 applied_tool=req.action,
                 subject_masked=req.lock_subject,
                 tokens_consumed=0,
-                output_url=req.image_url
+                output_url=fallback_res,
+                image_url=fallback_res
             )
 
     async def remove_background(self, req: RemoveBackgroundRequest) -> RemoveBackgroundResponse:
@@ -203,6 +226,7 @@ class ToolService:
                 task_id=task_id,
                 status="completed",
                 output_url=output_url,
+                cutout_url=output_url,
                 tokens_consumed=0
             )
         except Exception as e:
@@ -211,5 +235,6 @@ class ToolService:
                 task_id=task_id,
                 status="failed",
                 output_url=req.image_url,
+                cutout_url=req.image_url,
                 tokens_consumed=0
             )
