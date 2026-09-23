@@ -158,6 +158,28 @@ class ToolService:
             logger.debug(f"[Tool DB] History query skipped: {e}")
             return []
 
+    @staticmethod
+    def _format_friendly_error(err: Exception, tool_name: str) -> str:
+        """
+        Translates raw Python/HTTP exceptions into friendly, user-facing error messages.
+        """
+        err_str = str(err).lower()
+        if "cannot identify image" in err_str or "unidentifiedimageerror" in err_str:
+            return "Unable to process the image. Please upload a clear JPG, PNG, or WebP photo."
+        elif "timeout" in err_str or "timed out" in err_str:
+            return f"{tool_name} timed out. Please check your network connection and try again."
+        elif "402" in err_str or "payment required" in err_str or "quota" in err_str:
+            return "AI model capacity is temporarily busy. Please retry in a few moments."
+        elif "404" in err_str or "not found" in err_str or "nodename nor servname" in err_str:
+            return "Could not download the source image URL. Please verify the link is accessible."
+        elif "connection" in err_str or "network" in err_str:
+            return "Network connection issue. Please retry shortly."
+        else:
+            clean = str(err).replace("Exception:", "").replace("ValueError:", "").strip()
+            if len(clean) > 90 or "traceback" in clean.lower():
+                return f"{tool_name} encountered an unexpected issue. Please retry with another image."
+            return f"{tool_name} issue: {clean}"
+
     # ── Skill 1: Remove Background ────────────────────────────────────────────
     async def remove_background(self, req: RemoveBackgroundRequest) -> RemoveBackgroundResponse:
         """Removes background from image on local CPU with rembg (Zero GPU, Zero Tokens, Free)."""
@@ -198,13 +220,15 @@ class ToolService:
                 tokens_consumed=0
             )
         except Exception as e:
-            logger.error(f"[Skill 1: Remove BG] Error: {e}")
+            logger.error(f"[Skill 1: Remove BG] Error: {e}", exc_info=True)
             return RemoveBackgroundResponse(
                 task_id=task_id,
                 status="failed",
                 output_url=req.image_url,
                 cutout_url=req.image_url,
-                tokens_consumed=0
+                credits_deducted=0.0,
+                tokens_consumed=0,
+                error_message=self._format_friendly_error(e, "Background Removal")
             )
 
     @staticmethod
@@ -400,7 +424,9 @@ class ToolService:
                 status="failed",
                 output_url=req.image_url,
                 mode=req.mode,
-                tokens_consumed=0
+                credits_deducted=0.0,
+                tokens_consumed=0,
+                error_message=self._format_friendly_error(e, "AI Background")
             )
 
     @staticmethod
@@ -512,8 +538,9 @@ class ToolService:
                 status="failed",
                 output_url=req.image_url,
                 target_ratio=req.target_ratio,
+                credits_deducted=0.0,
                 tokens_consumed=0,
-                error_message=str(e)
+                error_message=self._format_friendly_error(e, "AI Expand")
             )
 
     # ── Skill 4: Upscale 4K ───────────────────────────────────────────────────
@@ -569,14 +596,15 @@ class ToolService:
                 tokens_consumed=0
             )
         except Exception as e:
-            logger.error(f"[Skill 4: Upscale 4K] Error: {e}")
+            logger.error(f"[Skill 4: Upscale 4K] Error: {e}", exc_info=True)
             return UpscaleResponse(
                 task_id=task_id,
                 status="failed",
                 output_url=req.image_url,
                 resolution="1024x1024",
+                credits_deducted=0.0,
                 tokens_consumed=0,
-                error_message=str(e)
+                error_message=self._format_friendly_error(e, "Upscale 4K")
             )
 
     # ── Skill 5: Product Detail Images ───────────────────────────────────────
@@ -684,8 +712,9 @@ class ToolService:
                 status="failed",
                 output_url=req.image_url,
                 product_name=req.product_name,
+                credits_deducted=0.0,
                 tokens_consumed=0,
-                error_message=str(e)
+                error_message=self._format_friendly_error(e, "Product Detail")
             )
 
     # ── Skill 6: Marketing Poster ────────────────────────────────────────────
@@ -791,8 +820,9 @@ class ToolService:
                 output_url=req.image_url or FALLBACK_TOOL_IMAGE,
                 topic=req.topic,
                 headline=req.topic,
+                credits_deducted=0.0,
                 tokens_consumed=0,
-                error_message=str(e)
+                error_message=self._format_friendly_error(e, "Marketing Poster")
             )
 
     # ── Legacy Preset Transforms ─────────────────────────────────────────────
