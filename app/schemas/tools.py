@@ -1,5 +1,5 @@
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, AliasChoices, ConfigDict, model_validator
+from typing import Optional, List, Dict, Any, Union
+from pydantic import BaseModel, Field, AliasChoices, ConfigDict, model_validator, field_validator
 
 # ── Base Model for Multi-Client Responses (Web & Mobile Parity) ──────────────
 class BaseToolResponse(BaseModel):
@@ -83,8 +83,19 @@ class AiExpandResponse(BaseToolResponse):
 class UpscaleRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
     image_url: str = Field(..., validation_alias=AliasChoices("image_url", "imageUrl", "photo_url", "url"), description="Source image to upscale")
-    scale_factor: int = Field(default=2, validation_alias=AliasChoices("scale_factor", "scaleFactor", "scale", "factor"), description="Scale multiplier")
+    scale_factor: Union[int, str] = Field(default=2, validation_alias=AliasChoices("scale_factor", "scaleFactor", "scale", "factor"), description="Scale multiplier")
     user_id: Optional[str] = Field(default=None, validation_alias=AliasChoices("user_id", "userId"))
+
+    @field_validator("scale_factor", mode="before")
+    @classmethod
+    def parse_scale_factor(cls, v: Any) -> int:
+        if isinstance(v, (int, float)):
+            return max(2, min(int(v), 8))
+        if isinstance(v, str):
+            clean = v.lower().replace("x", "").strip()
+            if clean.isdigit():
+                return max(2, min(int(clean), 8))
+        return 2
 
 class UpscaleResponse(BaseToolResponse):
     resolution: str = "4096x4096"

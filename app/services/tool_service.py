@@ -8,7 +8,7 @@ import httpx
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 import rembg
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 from app.infrastructure.clients.base import IDiffusionGateway
 from app.infrastructure.storage.task_store import ITaskStore
@@ -338,6 +338,85 @@ class ToolService:
 
         return composite.convert("RGB")
 
+    @staticmethod
+    def _resolve_aspect_dimensions(
+        aspect_ratio: str,
+        input_image_size: Optional[Tuple[int, int]] = None,
+        quality: str = "1k",
+        default_ratio: str = "1:1"
+    ) -> Tuple[int, int]:
+        """
+        Universal aspect ratio dimension resolver across all tools.
+        - Presets: 1:1, 4:5, 5:4, 9:16, 16:9, 3:4, 4:3, 2:3, 3:2, 21:9, 9:21, 2:1, 1:2.
+        - Auto: inspects input_image_size to pick the closest preset, or default_ratio.
+        - Custom: W:H string.
+        - 2K: scales dimensions by 1.5x.
+        """
+        dim_map = {
+            "1:1": (1024, 1024),
+            "4:5": (896, 1120),
+            "5:4": (1120, 896),
+            "9:16": (720, 1280),
+            "16:9": (1280, 720),
+            "3:4": (864, 1152),
+            "4:3": (1152, 864),
+            "2:3": (832, 1248),
+            "3:2": (1248, 832),
+            "21:9": (1344, 576),
+            "9:21": (576, 1344),
+            "2:1": (1408, 704),
+            "1:2": (704, 1408),
+        }
+        clean = str(aspect_ratio or "").strip().lower()
+
+        if clean == "auto":
+            if input_image_size and input_image_size[0] > 0 and input_image_size[1] > 0:
+                iw, ih = input_image_size
+                ir = iw / ih
+                presets = [
+                    ("1:1", 1.0),
+                    ("4:5", 0.8),
+                    ("5:4", 1.25),
+                    ("9:16", 9.0 / 16.0),
+                    ("16:9", 16.0 / 9.0),
+                    ("3:4", 0.75),
+                    ("4:3", 4.0 / 3.0),
+                    ("2:3", 2.0 / 3.0),
+                    ("3:2", 1.5),
+                    ("21:9", 21.0 / 9.0),
+                    ("9:21", 9.0 / 21.0),
+                    ("2:1", 2.0),
+                    ("1:2", 0.5),
+                ]
+                best_key, _ = min(presets, key=lambda p: abs(ir - p[1]))
+                w, h = dim_map[best_key]
+            else:
+                w, h = dim_map.get(default_ratio, (1024, 1024))
+        elif clean in dim_map:
+            w, h = dim_map[clean]
+        elif ":" in clean:
+            try:
+                parts = clean.split(":")
+                rw, rh = float(parts[0]), float(parts[1])
+                if rw > 0 and rh > 0:
+                    total_px = 1024 * 1024
+                    w = int(round((total_px * (rw / rh)) ** 0.5))
+                    h = int(round(w * (rh / rw)))
+                    w = max(512, min(1536, (w // 64) * 64))
+                    h = max(512, min(1536, (h // 64) * 64))
+                else:
+                    w, h = dim_map.get(default_ratio, (1024, 1024))
+            except Exception:
+                w, h = dim_map.get(default_ratio, (1024, 1024))
+        else:
+            w, h = dim_map.get(default_ratio, (1024, 1024))
+
+        if str(quality or "").lower() == "2k":
+            w = int(w * 1.5)
+            h = int(h * 1.5)
+
+        return w, h
+
     # ── Skill 2: AI Backgrounds ───────────────────────────────────────────────
     async def generate_ai_background(self, req: AiBackgroundRequest) -> AiBackgroundResponse:
         """
@@ -354,13 +433,20 @@ class ToolService:
                 # 1. Local CPU Cutout
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
-                w, h = cutout_img.size
+
+                # Resolve target canvas dimensions respecting aspect_ratio and quality
+                w, h = self._resolve_aspect_dimensions(
+                    req.aspect_ratio,
+                    input_image_size=cutout_img.size,
+                    quality=req.quality,
+                    default_ratio="1:1"
+                )
 
                 # 2. Pure White Canvas with subtle soft contact shadow at base
                 white_canvas = Image.new("RGBA", (w, h), (255, 255, 255, 255))
-                # Paste cutout with alpha
-                white_canvas.paste(cutout_img, (0, 0), cutout_img)
-                final_rgb = white_canvas.convert("RGB")
+                final_rgb = await asyncio.to_thread(self._composite_subject_on_backdrop, cutout_img, white_canvas, "ground")
+                if req.quality == "2k":
+                    final_rgb = final_rgb.filter(ImageFilter.UnsharpMask(radius=2, percent=125, threshold=3))
 
                 out_io = io.BytesIO()
                 final_rgb.save(out_io, format="PNG", optimize=True)
@@ -400,22 +486,13 @@ class ToolService:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
 
-                # Aspect ratio & quality dimension mapping
-                dim_map = {
-                    "1:1": (1024, 1024),
-                    "4:5": (896, 1120),
-                    "5:4": (1120, 896),
-                    "9:16": (720, 1280),
-                    "16:9": (1280, 720),
-                    "3:4": (864, 1152),
-                    "4:3": (1152, 864),
-                    "2:3": (832, 1248),
-                    "3:2": (1248, 832),
-                }
-                w, h = dim_map.get(str(req.aspect_ratio).strip(), (1024, 1024))
-                if req.quality == "2k":
-                    w = int(w * 1.5)
-                    h = int(h * 1.5)
+                # Resolve dimensions dynamically matching aspect ratio
+                w, h = self._resolve_aspect_dimensions(
+                    req.aspect_ratio,
+                    input_image_size=cutout_img.size,
+                    quality=req.quality,
+                    default_ratio="1:1"
+                )
 
                 # 2. Compile empty backdrop scene prompt
                 prompt = PromptCompiler.compile_for_ai_background(
@@ -455,10 +532,8 @@ class ToolService:
                     output_bytes = out_io.getvalue()
                 else:
                     # Fallback to white canvas if background network generation failed
-                    w, h = cutout_img.size
                     white_canvas = Image.new("RGBA", (w, h), (255, 255, 255, 255))
-                    white_canvas.paste(cutout_img, (0, 0), cutout_img)
-                    final_rgb = white_canvas.convert("RGB")
+                    final_rgb = await asyncio.to_thread(self._composite_subject_on_backdrop, cutout_img, white_canvas, "ground")
                     out_io = io.BytesIO()
                     final_rgb.save(out_io, format="PNG", optimize=True)
                     output_bytes = out_io.getvalue()
@@ -526,9 +601,15 @@ class ToolService:
             "3:2": 3.0 / 2.0,
             "21:9": 21.0 / 9.0,
             "9:21": 9.0 / 21.0,
+            "2:1": 2.0,
+            "1:2": 0.5,
         }
-        clean_ratio = str(target_ratio).strip()
-        if clean_ratio in ratio_map:
+        clean_ratio = str(target_ratio).strip().lower()
+        if clean_ratio == "auto":
+            target_w = int(orig_w * 1.30)
+            target_h = int(orig_h * 1.30)
+            target_ratio_val = target_w / target_h
+        elif clean_ratio in ratio_map:
             target_ratio_val = ratio_map[clean_ratio]
         elif ":" in clean_ratio:
             try:
@@ -538,14 +619,20 @@ class ToolService:
                 target_ratio_val = 16.0 / 9.0
         else:
             target_ratio_val = 16.0 / 9.0
+
         orig_ratio = orig_w / orig_h
 
-        if orig_ratio < target_ratio_val:
-            target_h = orig_h
-            target_w = int(orig_h * target_ratio_val)
-        else:
-            target_w = orig_w
-            target_h = int(orig_w / target_ratio_val)
+        if clean_ratio != "auto":
+            if abs(orig_ratio - target_ratio_val) < 0.05:
+                # Target matches source image: provide 1.30x canvas expansion for outpainted margins
+                target_w = int(orig_w * 1.30)
+                target_h = int(round(target_w / target_ratio_val))
+            elif orig_ratio < target_ratio_val:
+                target_h = orig_h
+                target_w = int(orig_h * target_ratio_val)
+            else:
+                target_w = orig_w
+                target_h = int(orig_w / target_ratio_val)
 
         max_dim = 3072 if quality == "2k" else 2048
         if max(target_w, target_h) > max_dim:
@@ -650,8 +737,17 @@ class ToolService:
             def _upscale_cpu(raw_bytes: bytes) -> tuple:
                 img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
                 w, h = img.size
-                factor = min(req.scale_factor, 4)
-                new_w, new_h = min(w * factor, 4096), min(h * factor, 4096)
+                factor = max(2, min(int(req.scale_factor), 8))
+                target_w = int(w * factor)
+                target_h = int(h * factor)
+                max_dim = 4096 if factor <= 2 else 8192
+                if max(target_w, target_h) > max_dim:
+                    scale = max_dim / max(target_w, target_h)
+                    new_w = max(1, int(target_w * scale))
+                    new_h = max(1, int(target_h * scale))
+                else:
+                    new_w = target_w
+                    new_h = target_h
                 img = img.resize((new_w, new_h), resample=Image.Resampling.LANCZOS)
                 img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=140, threshold=3))
                 out_io = io.BytesIO()
@@ -711,43 +807,12 @@ class ToolService:
         try:
             logger.info(f"[Skill 5: Product Detail] Product: {product_name} | Image: {req.image_url[:60] if req.image_url else 'None'}...")
             
-            # Universal dimension resolver supporting standard and custom aspect ratios
-            prod_dim_map = {
-                "1:1": (1024, 1024),
-                "4:5": (896, 1120),
-                "5:4": (1120, 896),
-                "9:16": (720, 1280),
-                "16:9": (1280, 720),
-                "3:4": (864, 1152),
-                "4:3": (1152, 864),
-                "2:3": (832, 1248),
-                "3:2": (1248, 832),
-                "21:9": (1344, 576),
-                "9:21": (576, 1344),
-            }
-            ratio_key = str(req.aspect_ratio).strip()
-            if ratio_key in prod_dim_map:
-                w, h = prod_dim_map[ratio_key]
-            elif ":" in ratio_key:
-                try:
-                    rw, rh = (float(x.strip()) for x in ratio_key.split(":", 1))
-                    if rw > 0 and rh > 0:
-                        total_px = 1024 * 1024
-                        w = int(round((total_px * (rw / rh)) ** 0.5))
-                        h = int(round(w * (rh / rw)))
-                        w = max(512, min(1536, (w // 64) * 64))
-                        h = max(512, min(1536, (h // 64) * 64))
-                    else:
-                        w, h = (896, 1120)
-                except Exception:
-                    w, h = (896, 1120)
-            else:
-                w, h = (896, 1120)
-
             is_2k = (getattr(req, "quality", "1k") or "1k").lower() == "2k"
-            if is_2k:
-                w = int(w * 1.5)
-                h = int(h * 1.5)
+            w, h = self._resolve_aspect_dimensions(
+                req.aspect_ratio,
+                quality=getattr(req, "quality", "1k"),
+                default_ratio="4:5"
+            )
 
             cost = 14.0 if is_2k else 10.0
             output_url = None
@@ -757,6 +822,15 @@ class ToolService:
                 input_bytes = await self._fetch_image_bytes(req.image_url)
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+
+                # If ratio is Auto, dynamically match input image aspect ratio
+                if str(req.aspect_ratio or "").strip().lower() == "auto":
+                    w, h = self._resolve_aspect_dimensions(
+                        "auto",
+                        input_image_size=cutout_img.size,
+                        quality=getattr(req, "quality", "1k"),
+                        default_ratio="4:5"
+                    )
 
                 # 2. Compile empty luxury showroom pedestal backdrop prompt
                 backdrop_prompt = PromptCompiler.compile_for_product_detail_backdrop(
@@ -793,13 +867,12 @@ class ToolService:
                     composite.save(out_io, format="PNG", optimize=True)
                     output_bytes = out_io.getvalue()
                 else:
-                    cw, ch = cutout_img.size
-                    white_canvas = Image.new("RGBA", (cw, ch), (255, 255, 255, 255))
-                    white_canvas.paste(cutout_img, (0, 0), cutout_img)
+                    white_canvas = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+                    composite = await asyncio.to_thread(self._composite_subject_on_backdrop, cutout_img, white_canvas, "ground")
                     if is_2k:
-                        white_canvas = white_canvas.filter(ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=3))
+                        composite = composite.filter(ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=3))
                     out_io = io.BytesIO()
-                    white_canvas.convert("RGB").save(out_io, format="PNG", optimize=True)
+                    composite.save(out_io, format="PNG", optimize=True)
                     output_bytes = out_io.getvalue()
 
                 output_url = await self._upload_to_supabase(output_bytes, "product_details")
@@ -875,42 +948,12 @@ class ToolService:
         headline_used = (req.headline or "").strip() or topic.title()
         try:
             logger.info(f"[Skill 6: Marketing Poster] Topic: {topic} | Category: {req.category} | Image: {req.image_url[:60] if req.image_url else 'None'}...")
-            poster_dim_map = {
-                "4:5": (896, 1120),
-                "5:4": (1120, 896),
-                "9:16": (720, 1280),
-                "16:9": (1280, 720),
-                "1:1": (1024, 1024),
-                "3:4": (864, 1152),
-                "4:3": (1152, 864),
-                "2:3": (832, 1248),
-                "3:2": (1248, 832),
-                "21:9": (1344, 576),
-                "9:21": (576, 1344),
-            }
-            ratio_key = str(req.aspect_ratio).strip()
-            if ratio_key in poster_dim_map:
-                w, h = poster_dim_map[ratio_key]
-            elif ":" in ratio_key:
-                try:
-                    rw, rh = (float(x.strip()) for x in ratio_key.split(":", 1))
-                    if rw > 0 and rh > 0:
-                        total_px = 1024 * 1024
-                        w = int(round((total_px * (rw / rh)) ** 0.5))
-                        h = int(round(w * (rh / rw)))
-                        w = max(512, min(1536, (w // 64) * 64))
-                        h = max(512, min(1536, (h // 64) * 64))
-                    else:
-                        w, h = (896, 1120)
-                except Exception:
-                    w, h = (896, 1120)
-            else:
-                w, h = (896, 1120)
-
             is_2k = (getattr(req, "quality", "1k") or "1k").lower() == "2k"
-            if is_2k:
-                w = int(w * 1.5)
-                h = int(h * 1.5)
+            w, h = self._resolve_aspect_dimensions(
+                req.aspect_ratio,
+                quality=getattr(req, "quality", "1k"),
+                default_ratio="4:5"
+            )
 
             cost = 14.0 if is_2k else 10.0
             output_url = None
@@ -920,6 +963,15 @@ class ToolService:
                 input_bytes = await self._fetch_image_bytes(req.image_url)
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+
+                # If ratio is Auto, dynamically match input image aspect ratio
+                if str(req.aspect_ratio or "").strip().lower() == "auto":
+                    w, h = self._resolve_aspect_dimensions(
+                        "auto",
+                        input_image_size=cutout_img.size,
+                        quality=getattr(req, "quality", "1k"),
+                        default_ratio="4:5"
+                    )
 
                 backdrop_prompt = PromptCompiler.compile_for_marketing_poster_backdrop(
                     topic=topic,
@@ -1069,7 +1121,17 @@ class ToolService:
             img = Image.composite(blurred_bg, img, mask)
 
         elif "upscale" in action_lower:
-            new_w, new_h = min(w * 2, 4096), min(h * 2, 4096)
+            factor = 4 if ("4x" in preset_lower or "ultra_4x" in preset_lower or "quad" in preset_lower) else 2
+            target_w = int(w * factor)
+            target_h = int(h * factor)
+            max_dim = 4096 if factor <= 2 else 8192
+            if max(target_w, target_h) > max_dim:
+                scale = max_dim / max(target_w, target_h)
+                new_w = max(1, int(target_w * scale))
+                new_h = max(1, int(target_h * scale))
+            else:
+                new_w = target_w
+                new_h = target_h
             img = img.resize((new_w, new_h), resample=Image.Resampling.LANCZOS)
             img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=140, threshold=3))
 
