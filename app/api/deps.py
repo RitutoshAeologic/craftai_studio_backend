@@ -48,9 +48,10 @@ def get_vision_service(
 
 def get_tool_service(
     diffusion_gateway: IDiffusionGateway = Depends(get_diffusion_gateway),
-    task_store: ITaskStore = Depends(get_task_store)
+    task_store: ITaskStore = Depends(get_task_store),
+    hf_client: HuggingFaceClient = Depends(get_huggingface_client)
 ) -> ToolService:
-    return ToolService(diffusion_gateway=diffusion_gateway, task_store=task_store)
+    return ToolService(diffusion_gateway=diffusion_gateway, task_store=task_store, hf_client=hf_client)
 
 def get_generation_service(
     diffusion_gateway: IDiffusionGateway = Depends(get_diffusion_gateway),
@@ -70,3 +71,12 @@ def get_generation_service(
         gemini_vision=vision,
         hf_client=hf
     )
+
+from app.services.remix_service import RemixService
+
+@lru_cache()
+def get_remix_service(
+    prompt_service: PromptService = Depends(get_prompt_service)
+) -> RemixService:
+    service = prompt_service if isinstance(prompt_service, PromptService) else get_prompt_service()
+    return RemixService(prompt_service=service)

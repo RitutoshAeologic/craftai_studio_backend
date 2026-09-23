@@ -197,5 +197,85 @@ class TestCrossPlatformContracts(unittest.TestCase):
         self.assertIn("access-control-allow-origin", res.headers)
         self.assertEqual(res.headers.get("access-control-allow-credentials"), "true")
 
+    # ─────────────────────────────────────────────────────────────
+    # 8. Prompt Engineering Engine Contracts (/config, /expand, /chat-delta)
+    # ─────────────────────────────────────────────────────────────
+    def test_llm_config_contract(self):
+        """Guarantees /config returns active provider and model mappings."""
+        res = self.client.get("/api/v1/prompt-engineering/config")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("active_provider", data)
+        self.assertIn("available_providers", data)
+        self.assertIn("model_mappings", data)
+
+    @patch("app.services.prompt_service.PromptService.expand_prompt", new_callable=AsyncMock)
+    def test_prompt_expand_contract(self, mock_expand):
+        """Validates request and response contract for 1-shot expansion."""
+        mock_expand.return_value = {
+            "master_prompt": "Cinematic master prompt",
+            "negative_prompt": "blurry, lowres",
+            "complexity_score": 15,
+            "model_used": "groq",
+            "structured_metadata": {
+                "subject": "Cyberpunk warrior",
+                "lighting": "Neon glow"
+            }
+        }
+        res = self.client.post(
+            "/api/v1/prompt-engineering/expand",
+            json={
+                "raw_prompt": "Cyberpunk warrior",
+                "starter_chip": "Cinematic",
+                "aspect_ratio": "1:1",
+                "ai_model": "groq"
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["master_prompt"], "Cinematic master prompt")
+        self.assertEqual(data["negative_prompt"], "blurry, lowres")
+        self.assertEqual(data["model_used"], "groq")
+
+    @patch("app.services.prompt_service.PromptService.compile_delta", new_callable=AsyncMock)
+    def test_prompt_chat_delta_contract(self, mock_delta):
+        """Validates request and response contract for conversational chat delta."""
+        mock_delta.return_value = {
+            "compiled_prompt": "Refined cyberpunk warrior with neon rain",
+            "diff": {
+                "added": ["neon rain"],
+                "removed": []
+            },
+            "suggested_chips": ["+ Fog", "+ Rim Light"],
+            "model_used": "groq"
+        }
+        res = self.client.post(
+            "/api/v1/prompt-engineering/chat-delta",
+            json={
+                "base_prompt": "Cyberpunk warrior",
+                "user_instruction": "Add neon rain",
+                "turn_count": 1,
+                "ai_model": "groq"
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("compiled_prompt", data)
+        self.assertIn("diff", data)
+        self.assertIn("suggested_chips", data)
+
+    def test_prompt_chat_delta_turn_limit_exceeded(self):
+        """Guarantees 429 when turn_count exceeds 5."""
+        res = self.client.post(
+            "/api/v1/prompt-engineering/chat-delta",
+            json={
+                "base_prompt": "Cyberpunk warrior",
+                "user_instruction": "Add neon rain",
+                "turn_count": 6
+            }
+        )
+        self.assertEqual(res.status_code, 429)
+        self.assertIn("limit reached", res.json().get("detail", ""))
+
 if __name__ == "__main__":
     unittest.main()
