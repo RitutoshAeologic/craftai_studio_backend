@@ -1,3 +1,4 @@
+import uuid
 from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel, Field, AliasChoices, ConfigDict, model_validator, field_validator
 
@@ -25,10 +26,10 @@ class BaseToolResponse(BaseModel):
 # ── Preset Tools ─────────────────────────────────────────────────────────────
 class ToolPresetRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
-    image_id: str = Field(..., validation_alias=AliasChoices("image_id", "imageId", "id"), description="Target image identifier in library or session")
+    image_id: Optional[str] = Field(default_factory=lambda: f"img_{uuid.uuid4().hex[:8]}", validation_alias=AliasChoices("image_id", "imageId", "id"), description="Target image identifier in library or session")
     image_url: Optional[str] = Field(default=None, validation_alias=AliasChoices("image_url", "imageUrl", "photo_url", "url"), description="Public URL or base64 data URL")
     action: str = Field(..., description="Action type: 'relight', 'bokeh', or 'upscale'")
-    target_preset: str = Field(..., validation_alias=AliasChoices("target_preset", "targetPreset", "preset"), description="Preset identifier")
+    target_preset: str = Field(default="default", validation_alias=AliasChoices("target_preset", "targetPreset", "preset"), description="Preset identifier")
     lock_subject: bool = Field(default=True, validation_alias=AliasChoices("lock_subject", "lockSubject"), description="Enforce strict subject face & silhouette preservation")
     user_id: Optional[str] = Field(default=None, validation_alias=AliasChoices("user_id", "userId"))
 
@@ -71,7 +72,7 @@ class AiBackgroundResponse(BaseToolResponse):
 class AiExpandRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
     image_url: str = Field(..., validation_alias=AliasChoices("image_url", "imageUrl", "photo_url", "url"), description="Source image to expand")
-    target_ratio: str = Field(default="16:9", validation_alias=AliasChoices("target_ratio", "targetRatio", "aspect_ratio", "aspectRatio"), description="Target ratio")
+    target_ratio: str = Field(default="16:9", validation_alias=AliasChoices("target_ratio", "targetRatio", "aspect_ratio", "aspectRatio", "ratio"), description="Target ratio")
     quality: str = Field(default="1k", description="'1k' or '2k'")
     user_id: Optional[str] = Field(default=None, validation_alias=AliasChoices("user_id", "userId"))
 
@@ -105,7 +106,7 @@ class UpscaleResponse(BaseToolResponse):
 class ProductDetailRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
     image_url: Optional[str] = Field(default=None, validation_alias=AliasChoices("image_url", "imageUrl", "photo_url", "url"), description="Hero product image")
-    product_name: Optional[str] = Field(default="Commercial Product", validation_alias=AliasChoices("product_name", "productName", "name", "title"), description="Product title")
+    product_name: Optional[str] = Field(default="Commercial Product", validation_alias=AliasChoices("product_name", "productName", "name", "title", "product"), description="Product title")
     aspect_ratio: str = Field(default="4:5", validation_alias=AliasChoices("aspect_ratio", "aspectRatio", "ratio"), description="Detail ratio")
     language: str = Field(default="Auto", description="Detail copy language")
     quality: str = Field(default="1k", description="'1k' or '2k'")
@@ -119,11 +120,11 @@ class ProductDetailResponse(BaseToolResponse):
 class MarketingPosterRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
     image_url: Optional[str] = Field(default=None, validation_alias=AliasChoices("image_url", "imageUrl", "photo_url"), description="Optional product/subject image to feature on poster")
-    topic: Optional[str] = Field(default="Commercial Promotion", description="Poster topic")
+    topic: Optional[str] = Field(default="Commercial Promotion", validation_alias=AliasChoices("topic", "prompt", "title"), description="Poster topic")
     category: str = Field(default="Promotion", description="'Beverage', 'Fashion', 'Hiring', 'Flash Sale', 'Promotion'")
     aspect_ratio: str = Field(default="4:5", validation_alias=AliasChoices("aspect_ratio", "aspectRatio", "ratio"), description="Poster ratio")
     language: str = Field(default="Auto", description="Headline language")
-    headline: Optional[str] = Field(default=None, description="Optional custom headline")
+    headline: Optional[str] = Field(default=None, validation_alias=AliasChoices("headline", "tagline", "title"), description="Optional custom headline")
     quality: str = Field(default="1k", description="'1k' or '2k'")
     user_id: Optional[str] = Field(default=None, validation_alias=AliasChoices("user_id", "userId"))
 

@@ -84,6 +84,7 @@ class PromptCompiler:
         bold negative space, and typographic focus tailored for Flux text synthesis.
         """
         clean_topic = cls.strip_tag_soup(topic or "Special Promotion")
+        clean_category = str(category or "Commercial").replace("_", " ").title()
         effective_headline = headline or clean_topic.title()
 
         lang_clause = ""
@@ -91,7 +92,7 @@ class PromptCompiler:
             lang_clause = f" Typography and headline copy written in {language}."
 
         prompt = (
-            f"Commercial advertising poster for '{clean_topic}', {category} design. "
+            f"Commercial advertising poster for '{clean_topic}', {clean_category} design. "
             f"Clean minimalist Swiss graphic design layout, bold headline typography reading '{effective_headline}'.{lang_clause} "
             f"High contrast editorial color grading, crisp studio rim lighting, generous negative copy space, "
             f"ultra-sharp branding composition formatted for {aspect_ratio} display."
@@ -112,6 +113,7 @@ class PromptCompiler:
         and top headline framing, tailored for compositing user's product without clutter.
         """
         clean_topic = cls.strip_tag_soup(topic or "Special Promotion")
+        clean_category = str(category or "Commercial").replace("_", " ").title()
         effective_headline = headline or clean_topic.title()
 
         lang_clause = ""
@@ -119,7 +121,7 @@ class PromptCompiler:
             lang_clause = f" Typography and headline copy written in {language}."
 
         prompt = (
-            f"Commercial advertising poster graphic layout backdrop for '{clean_topic}', {category} design. "
+            f"Commercial advertising poster graphic layout backdrop for '{clean_topic}', {clean_category} design. "
             f"Clean minimalist Swiss graphic design framing, bold headline typography reading '{effective_headline}' placed prominently at top.{lang_clause} "
             f"Spacious clean negative space and empty central hero zone reserved for product display, no products in center, no foreground objects, "
             f"high contrast editorial color grading, crisp studio rim lighting, formatted for {aspect_ratio} display."
@@ -138,9 +140,10 @@ class PromptCompiler:
         Generates clean empty backdrop scenes with copy space so the user's isolated
         foreground subject is seamlessly composited without hallucinating duplicate objects.
         """
-        if mode == "pure_white":
+        clean_mode = str(mode or "smart").strip().lower().replace("-", "_").replace(" ", "_")
+        if clean_mode in ("pure_white", "purewhite", "white", "studio_white"):
             return "Seamless pure white infinity cyclo studio backdrop, subtle soft contact floor shadow, clean commercial e-commerce lighting."
-        elif mode == "smart":
+        elif clean_mode == "smart":
             return (
                 "Empty high-end architectural minimalist podium surface and backdrop, clean empty studio stage, "
                 "smooth beige travertine stone texture, gentle diffused morning sunlight casting soft geometric shadows, "

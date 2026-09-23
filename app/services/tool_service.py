@@ -429,7 +429,8 @@ class ToolService:
             logger.info(f"[Skill 2: AI BG] Mode: {req.mode} | Image: {req.image_url[:60]}...")
             input_bytes = await self._fetch_image_bytes(req.image_url)
 
-            if req.mode == "pure_white":
+            clean_mode = str(req.mode or "pure_white").strip().lower().replace("-", "_").replace(" ", "_")
+            if clean_mode in ("pure_white", "purewhite", "white", "studio_white"):
                 # 1. Local CPU Cutout
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")

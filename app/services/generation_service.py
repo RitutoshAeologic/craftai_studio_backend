@@ -122,7 +122,7 @@ class GenerationService:
                 width=req.width or 1024,
                 height=req.height or 1024,
                 seed=req.seed or 42,
-                model="flux"
+                model=req.model or "flux"
             )
 
         # ── 3. Record Task in State Store ─────────────────────────────────────

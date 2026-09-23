@@ -39,7 +39,10 @@ class HuggingFaceClient:
             logger.info(f"[HuggingFace FLUX.1] Generating image for prompt: '{prompt[:100]}...'")
             img = self.inf_client.text_to_image(
                 prompt=prompt,
-                model="black-forest-labs/FLUX.1-schnell"
+                model="black-forest-labs/FLUX.1-schnell",
+                width=width,
+                height=height,
+                seed=seed
             )
             buffer = io.BytesIO()
             img.save(buffer, format="PNG")
