@@ -270,13 +270,14 @@ class ToolService:
             )
 
     @staticmethod
-    def _composite_subject_on_backdrop(cutout_rgba: Image.Image, bg_rgba: Image.Image) -> Image.Image:
+    def _composite_subject_on_backdrop(cutout_rgba: Image.Image, bg_rgba: Image.Image, placement: str = "ground") -> Image.Image:
         """
         Intelligently composites an isolated foreground subject onto a generated background:
         1. Tight bounding box cropping to eliminate dead alpha margins.
-        2. Proportional scaling preserving aspect ratio.
-        3. Realistic ground-level placement.
-        4. Soft ambient contact shadow beneath the subject's base.
+        2. Proportional scaling preserving aspect ratio (filling ~65-72% of canvas without artificial clamp).
+        3. Placement modes:
+           - 'ground': realistic ground-level placement on pedestal/floor with soft contact shadow.
+           - 'center': hero-centered placement (ideal for posters) with natural silhouette drop shadow.
         """
         bbox = cutout_rgba.getbbox()
         subject = cutout_rgba.crop(bbox) if bbox else cutout_rgba
@@ -290,32 +291,50 @@ class ToolService:
         # Scale subject to occupy 65-72% of canvas height or width (natural commercial staging)
         max_w = int(bg_w * 0.70)
         max_h = int(bg_h * 0.70)
-        scale = min(max_w / sub_w, max_h / sub_h, 1.2)
+        scale = min(max_w / sub_w, max_h / sub_h)
         new_w = max(1, int(sub_w * scale))
         new_h = max(1, int(sub_h * scale))
         subject_scaled = subject.resize((new_w, new_h), resample=Image.Resampling.LANCZOS)
 
-        # Center horizontally, place baseline around 82% of background height
-        pos_x = (bg_w - new_w) // 2
-        pos_y = int(bg_h * 0.82) - new_h
-        # Clamp to ensure subject stays within visible canvas
-        pos_y = max(int(bg_h * 0.08), min(pos_y, bg_h - new_h - int(bg_h * 0.04)))
-
-        # Soft realistic contact shadow under the base of the object
-        shadow_h = max(12, int(new_h * 0.16))
-        shadow_w = int(new_w * 0.90)
-        shadow_img = Image.new("RGBA", (shadow_w, shadow_h), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(shadow_img)
-        draw.ellipse([0, 0, shadow_w, shadow_h], fill=(15, 15, 20, 120))
-        shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(radius=max(4, shadow_h // 3)))
-
-        shadow_x = (bg_w - shadow_w) // 2
-        shadow_y = pos_y + new_h - (shadow_h // 2)
-
-        # Layer compositing: Background -> Shadow -> Subject
         composite = bg_rgba.copy()
-        composite.paste(shadow_img, (shadow_x, shadow_y), shadow_img)
-        composite.paste(subject_scaled, (pos_x, pos_y), subject_scaled)
+
+        if placement == "center":
+            # Center horizontally & vertically with slight 4% downward offset for headline headroom
+            pos_x = (bg_w - new_w) // 2
+            pos_y = max(int(bg_h * 0.08), min((bg_h - new_h) // 2 + int(bg_h * 0.04), bg_h - new_h - int(bg_h * 0.04)))
+
+            # Ambient silhouette drop shadow matching the subject's contours
+            alpha = subject_scaled.split()[-1]
+            shadow_mask = alpha.filter(ImageFilter.GaussianBlur(radius=max(6, int(min(new_w, new_h) * 0.035))))
+            shadow_img = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
+            shadow_tint = Image.new("RGBA", (new_w, new_h), (12, 12, 16, 110))
+            shadow_img.paste(shadow_tint, (0, 0), shadow_mask)
+
+            # Offset drop shadow slightly down & right
+            shadow_offset_x = pos_x + max(2, int(new_w * 0.015))
+            shadow_offset_y = pos_y + max(4, int(new_h * 0.025))
+
+            composite.paste(shadow_img, (shadow_offset_x, shadow_offset_y), shadow_img)
+            composite.paste(subject_scaled, (pos_x, pos_y), subject_scaled)
+        else:
+            # Ground placement: baseline around 82% of background height
+            pos_x = (bg_w - new_w) // 2
+            pos_y = int(bg_h * 0.82) - new_h
+            pos_y = max(int(bg_h * 0.08), min(pos_y, bg_h - new_h - int(bg_h * 0.04)))
+
+            # Soft realistic contact shadow under the base of the object
+            shadow_h = max(12, int(new_h * 0.16))
+            shadow_w = int(new_w * 0.90)
+            shadow_img = Image.new("RGBA", (shadow_w, shadow_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(shadow_img)
+            draw.ellipse([0, 0, shadow_w, shadow_h], fill=(15, 15, 20, 120))
+            shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(radius=max(4, shadow_h // 3)))
+
+            shadow_x = (bg_w - shadow_w) // 2
+            shadow_y = pos_y + new_h - (shadow_h // 2)
+
+            composite.paste(shadow_img, (shadow_x, shadow_y), shadow_img)
+            composite.paste(subject_scaled, (pos_x, pos_y), subject_scaled)
 
         return composite.convert("RGB")
 
@@ -688,31 +707,60 @@ class ToolService:
         """Skill 5: 1 Photo to full e-commerce product feature listing set with subject preservation."""
         task_id = f"tool_prod_{uuid.uuid4().hex[:8]}"
         t0 = time.time()
+        product_name = (req.product_name or "").strip() or "Commercial Product"
         try:
-            logger.info(f"[Skill 5: Product Detail] Product: {req.product_name} | Image: {req.image_url[:60] if req.image_url else 'None'}...")
+            logger.info(f"[Skill 5: Product Detail] Product: {product_name} | Image: {req.image_url[:60] if req.image_url else 'None'}...")
             
+            # Universal dimension resolver supporting standard and custom aspect ratios
+            prod_dim_map = {
+                "1:1": (1024, 1024),
+                "4:5": (896, 1120),
+                "5:4": (1120, 896),
+                "9:16": (720, 1280),
+                "16:9": (1280, 720),
+                "3:4": (864, 1152),
+                "4:3": (1152, 864),
+                "2:3": (832, 1248),
+                "3:2": (1248, 832),
+                "21:9": (1344, 576),
+                "9:21": (576, 1344),
+            }
+            ratio_key = str(req.aspect_ratio).strip()
+            if ratio_key in prod_dim_map:
+                w, h = prod_dim_map[ratio_key]
+            elif ":" in ratio_key:
+                try:
+                    rw, rh = (float(x.strip()) for x in ratio_key.split(":", 1))
+                    if rw > 0 and rh > 0:
+                        total_px = 1024 * 1024
+                        w = int(round((total_px * (rw / rh)) ** 0.5))
+                        h = int(round(w * (rh / rw)))
+                        w = max(512, min(1536, (w // 64) * 64))
+                        h = max(512, min(1536, (h // 64) * 64))
+                    else:
+                        w, h = (896, 1120)
+                except Exception:
+                    w, h = (896, 1120)
+            else:
+                w, h = (896, 1120)
+
+            is_2k = (getattr(req, "quality", "1k") or "1k").lower() == "2k"
+            if is_2k:
+                w = int(w * 1.5)
+                h = int(h * 1.5)
+
+            cost = 14.0 if is_2k else 10.0
             output_url = None
+
             if req.image_url and req.image_url.strip():
                 # 1. Fetch user's uploaded product and extract transparent cutout
                 input_bytes = await self._fetch_image_bytes(req.image_url)
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
 
-                # Dynamic dimensions based on product detail ratio
-                prod_dim_map = {
-                    "1:1": (1024, 1024),
-                    "4:5": (896, 1120),
-                    "5:4": (1120, 896),
-                    "9:16": (720, 1280),
-                    "16:9": (1280, 720),
-                    "3:4": (864, 1152),
-                    "4:3": (1152, 864),
-                }
-                w, h = prod_dim_map.get(str(req.aspect_ratio).strip(), (896, 1120))
-
                 # 2. Compile empty luxury showroom pedestal backdrop prompt
                 backdrop_prompt = PromptCompiler.compile_for_product_detail_backdrop(
-                    product_name=req.product_name
+                    product_name=product_name
                 )
 
                 # 3. Generate pedestal backdrop
@@ -738,14 +786,18 @@ class ToolService:
                 if bg_bytes:
                     bg_img = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
                     # 4. Composite user's exact product onto luxury showcase pedestal
-                    composite = await asyncio.to_thread(self._composite_subject_on_backdrop, cutout_img, bg_img)
+                    composite = await asyncio.to_thread(self._composite_subject_on_backdrop, cutout_img, bg_img, "ground")
+                    if is_2k:
+                        composite = composite.filter(ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=3))
                     out_io = io.BytesIO()
                     composite.save(out_io, format="PNG", optimize=True)
                     output_bytes = out_io.getvalue()
                 else:
-                    w, h = cutout_img.size
-                    white_canvas = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+                    cw, ch = cutout_img.size
+                    white_canvas = Image.new("RGBA", (cw, ch), (255, 255, 255, 255))
                     white_canvas.paste(cutout_img, (0, 0), cutout_img)
+                    if is_2k:
+                        white_canvas = white_canvas.filter(ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=3))
                     out_io = io.BytesIO()
                     white_canvas.convert("RGB").save(out_io, format="PNG", optimize=True)
                     output_bytes = out_io.getvalue()
@@ -753,11 +805,20 @@ class ToolService:
                 output_url = await self._upload_to_supabase(output_bytes, "product_details")
                 prompt = backdrop_prompt
             else:
-                prompt = PromptCompiler.compile_for_product_detail(product_name=req.product_name)
+                prompt = PromptCompiler.compile_for_product_detail(
+                    product_name=product_name,
+                    language=req.language or "Auto"
+                )
                 if self.hf_client:
                     try:
                         flux_bytes = await self.hf_client.generate_flux(prompt=prompt, width=w, height=h, seed=42)
                         if flux_bytes:
+                            if is_2k:
+                                f_img = Image.open(io.BytesIO(flux_bytes)).convert("RGB")
+                                f_img = f_img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=3))
+                                f_io = io.BytesIO()
+                                f_img.save(f_io, format="PNG", optimize=True)
+                                flux_bytes = f_io.getvalue()
                             output_url = await self._upload_to_supabase(flux_bytes, "product_details")
                     except Exception as err:
                         logger.warning(f"[Skill 5: Product Detail] Flux err: {err}")
@@ -771,16 +832,16 @@ class ToolService:
                 job_type="PRODUCT_DETAIL",
                 prompt=prompt,
                 output_url=output_url,
-                credits=10.0,
-                metadata={"product_name": req.product_name, "source_url": req.image_url, "ratio": req.aspect_ratio}
+                credits=cost,
+                metadata={"product_name": product_name, "source_url": req.image_url, "ratio": req.aspect_ratio, "quality": "2k" if is_2k else "1k"}
             )
             self._persist_tool_generation(
                 user_id=req.user_id,
                 tool_type="product_detail",
                 input_image_url=req.image_url,
                 output_image_url=output_url,
-                parameters={"product_name": req.product_name, "aspect_ratio": req.aspect_ratio, "language": req.language},
-                credits=10.0,
+                parameters={"product_name": product_name, "aspect_ratio": req.aspect_ratio, "language": req.language, "quality": "2k" if is_2k else "1k"},
+                credits=cost,
                 latency_ms=latency_ms,
                 status="completed"
             )
@@ -789,9 +850,9 @@ class ToolService:
                 task_id=task_id,
                 status="completed",
                 output_url=output_url,
-                product_name=req.product_name,
-                credits_deducted=10.0,
-                tokens_consumed=10
+                product_name=product_name,
+                credits_deducted=cost,
+                tokens_consumed=14 if is_2k else 10
             )
         except Exception as e:
             logger.error(f"[Skill 5: Product Detail] Error: {e}", exc_info=True)
@@ -799,7 +860,7 @@ class ToolService:
                 task_id=task_id,
                 status="failed",
                 output_url="",
-                product_name=req.product_name,
+                product_name=product_name,
                 credits_deducted=0.0,
                 tokens_consumed=0,
                 error_message=self._format_friendly_error(e, "Product Detail")
@@ -810,8 +871,10 @@ class ToolService:
         """Skill 6: Promos · Events · Commercial Posters with optional subject compositing."""
         task_id = f"tool_poster_{uuid.uuid4().hex[:8]}"
         t0 = time.time()
+        topic = (req.topic or "").strip() or (req.headline or "Commercial Promotion")
+        headline_used = (req.headline or "").strip() or topic.title()
         try:
-            logger.info(f"[Skill 6: Marketing Poster] Topic: {req.topic} | Category: {req.category} | Image: {req.image_url[:60] if req.image_url else 'None'}...")
+            logger.info(f"[Skill 6: Marketing Poster] Topic: {topic} | Category: {req.category} | Image: {req.image_url[:60] if req.image_url else 'None'}...")
             poster_dim_map = {
                 "4:5": (896, 1120),
                 "5:4": (1120, 896),
@@ -822,35 +885,60 @@ class ToolService:
                 "4:3": (1152, 864),
                 "2:3": (832, 1248),
                 "3:2": (1248, 832),
+                "21:9": (1344, 576),
+                "9:21": (576, 1344),
             }
-            w, h = poster_dim_map.get(str(req.aspect_ratio).strip(), (896, 1120))
-            if req.quality == "2k":
+            ratio_key = str(req.aspect_ratio).strip()
+            if ratio_key in poster_dim_map:
+                w, h = poster_dim_map[ratio_key]
+            elif ":" in ratio_key:
+                try:
+                    rw, rh = (float(x.strip()) for x in ratio_key.split(":", 1))
+                    if rw > 0 and rh > 0:
+                        total_px = 1024 * 1024
+                        w = int(round((total_px * (rw / rh)) ** 0.5))
+                        h = int(round(w * (rh / rw)))
+                        w = max(512, min(1536, (w // 64) * 64))
+                        h = max(512, min(1536, (h // 64) * 64))
+                    else:
+                        w, h = (896, 1120)
+                except Exception:
+                    w, h = (896, 1120)
+            else:
+                w, h = (896, 1120)
+
+            is_2k = (getattr(req, "quality", "1k") or "1k").lower() == "2k"
+            if is_2k:
                 w = int(w * 1.5)
                 h = int(h * 1.5)
 
-            prompt = PromptCompiler.compile_for_marketing_poster(
-                topic=req.topic,
-                category=req.category,
-                aspect_ratio=req.aspect_ratio,
-                headline=req.headline
-            )
-
+            cost = 14.0 if is_2k else 10.0
             output_url = None
+
             if req.image_url and req.image_url.strip():
-                # Extract product cutout and composite onto poster background
+                # Extract product cutout and composite onto specialized poster layout backdrop
                 input_bytes = await self._fetch_image_bytes(req.image_url)
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
 
+                backdrop_prompt = PromptCompiler.compile_for_marketing_poster_backdrop(
+                    topic=topic,
+                    category=req.category,
+                    aspect_ratio=req.aspect_ratio,
+                    headline=headline_used,
+                    language=req.language or "Auto"
+                )
+                prompt = backdrop_prompt
+
                 bg_bytes = None
                 if self.hf_client:
                     try:
-                        bg_bytes = await self.hf_client.generate_flux(prompt=prompt, width=w, height=h, seed=42)
+                        bg_bytes = await self.hf_client.generate_flux(prompt=backdrop_prompt, width=w, height=h, seed=42)
                     except Exception as err:
                         logger.warning(f"[Skill 6: Marketing Poster] Flux err: {err}")
 
                 if not bg_bytes:
-                    fallback_url = self.diffusion_gateway.build_safe_url(prompt, width=w, height=h)
+                    fallback_url = self.diffusion_gateway.build_safe_url(backdrop_prompt, width=w, height=h)
                     try:
                         bg_bytes = await self._fetch_image_bytes(fallback_url)
                     except Exception as fetch_err:
@@ -858,18 +946,33 @@ class ToolService:
 
                 if bg_bytes:
                     bg_img = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
-                    composite = await asyncio.to_thread(self._composite_subject_on_backdrop, cutout_img, bg_img)
+                    composite = await asyncio.to_thread(self._composite_subject_on_backdrop, cutout_img, bg_img, "center")
+                    if is_2k:
+                        composite = composite.filter(ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=3))
                     out_io = io.BytesIO()
                     composite.save(out_io, format="PNG", optimize=True)
                     output_bytes = out_io.getvalue()
                     output_url = await self._upload_to_supabase(output_bytes, "marketing_posters")
                 else:
-                    output_url = self.diffusion_gateway.build_safe_url(prompt, width=w, height=h)
+                    output_url = self.diffusion_gateway.build_safe_url(backdrop_prompt, width=w, height=h)
             else:
+                prompt = PromptCompiler.compile_for_marketing_poster(
+                    topic=topic,
+                    category=req.category,
+                    aspect_ratio=req.aspect_ratio,
+                    headline=headline_used,
+                    language=req.language or "Auto"
+                )
                 if self.hf_client:
                     try:
                         flux_bytes = await self.hf_client.generate_flux(prompt=prompt, width=w, height=h, seed=42)
                         if flux_bytes:
+                            if is_2k:
+                                f_img = Image.open(io.BytesIO(flux_bytes)).convert("RGB")
+                                f_img = f_img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=3))
+                                f_io = io.BytesIO()
+                                f_img.save(f_io, format="PNG", optimize=True)
+                                flux_bytes = f_io.getvalue()
                             output_url = await self._upload_to_supabase(flux_bytes, "marketing_posters")
                     except Exception as err:
                         logger.warning(f"[Skill 6: Marketing Poster] Flux err: {err}")
@@ -877,9 +980,7 @@ class ToolService:
                 if not output_url:
                     output_url = self.diffusion_gateway.build_safe_url(prompt, width=w, height=h)
 
-            headline_used = req.headline or req.topic.title()
             latency_ms = int((time.time() - t0) * 1000)
-            cost = 10.0 if req.quality == "1k" else 14.0
 
             self._persist_job(
                 user_id=req.user_id,
@@ -888,14 +989,14 @@ class ToolService:
                 prompt=prompt,
                 output_url=output_url,
                 credits=cost,
-                metadata={"topic": req.topic, "category": req.category, "headline": headline_used, "ratio": req.aspect_ratio, "source_url": req.image_url}
+                metadata={"topic": topic, "category": req.category, "headline": headline_used, "ratio": req.aspect_ratio, "source_url": req.image_url, "quality": "2k" if is_2k else "1k"}
             )
             self._persist_tool_generation(
                 user_id=req.user_id,
                 tool_type="marketing_poster",
                 input_image_url=req.image_url,
                 output_image_url=output_url,
-                parameters={"topic": req.topic, "category": req.category, "headline": headline_used, "aspect_ratio": req.aspect_ratio, "quality": req.quality},
+                parameters={"topic": topic, "category": req.category, "headline": headline_used, "aspect_ratio": req.aspect_ratio, "quality": "2k" if is_2k else "1k", "language": req.language},
                 credits=cost,
                 latency_ms=latency_ms,
                 status="completed"
@@ -905,10 +1006,10 @@ class ToolService:
                 task_id=task_id,
                 status="completed",
                 output_url=output_url,
-                topic=req.topic,
+                topic=topic,
                 headline=headline_used,
                 credits_deducted=cost,
-                tokens_consumed=10 if req.quality == "1k" else 14
+                tokens_consumed=14 if is_2k else 10
             )
         except Exception as e:
             logger.error(f"[Skill 6: Marketing Poster] Error: {e}", exc_info=True)
@@ -916,8 +1017,8 @@ class ToolService:
                 task_id=task_id,
                 status="failed",
                 output_url="",
-                topic=req.topic,
-                headline=req.topic,
+                topic=topic,
+                headline=headline_used,
                 credits_deducted=0.0,
                 tokens_consumed=0,
                 error_message=self._format_friendly_error(e, "Marketing Poster")

@@ -198,5 +198,89 @@ class TestWebCrossPlatformLoopholes(unittest.TestCase):
         self.assertEqual(data.get("credits_deducted"), 0.0)
         self.assertIsNotNone(data.get("error_message"))
 
+    def test_product_detail_text_only_no_image(self):
+        """Product detail can be generated from text only without image_url or UnboundLocalError."""
+        res = self.client.post(
+            "/api/v1/prompt-engineering/tools/product-detail",
+            json={
+                "product_name": "Minimalist Oak Coffee Table",
+                "aspect_ratio": "4:5",
+                "language": "English",
+                "userId": "00000000-0000-0000-0000-000000000000"
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data.get("status"), "completed")
+        self.assertEqual(data.get("product_name"), "Minimalist Oak Coffee Table")
+        self.assertTrue(len(data.get("output_url", "")) > 0)
+        self.assertEqual(data.get("credits_deducted"), 10.0)
+
+    def test_product_detail_optional_product_name(self):
+        """Product detail handles omitted product_name cleanly without Pydantic 422 error."""
+        res = self.client.post(
+            "/api/v1/prompt-engineering/tools/product-detail",
+            json={
+                "imageUrl": self.dummy_b64,
+                "aspectRatio": "1:1",
+                "userId": "00000000-0000-0000-0000-000000000000"
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data.get("status"), "completed")
+        self.assertTrue(len(data.get("product_name", "")) > 0)
+
+    def test_product_detail_2k_quality(self):
+        """Product detail supports 2k quality with 14 credits deducted."""
+        res = self.client.post(
+            "/api/v1/prompt-engineering/tools/product-detail",
+            json={
+                "productName": "Ergonomic Gaming Chair",
+                "aspectRatio": "16:9",
+                "quality": "2k",
+                "userId": "00000000-0000-0000-0000-000000000000"
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data.get("status"), "completed")
+        self.assertEqual(data.get("credits_deducted"), 14.0)
+
+    def test_marketing_poster_with_product_cutout(self):
+        """Marketing poster composites uploaded image onto specialized empty-stage layout backdrop."""
+        res = self.client.post(
+            "/api/v1/prompt-engineering/tools/marketing-poster",
+            json={
+                "imageUrl": self.dummy_b64,
+                "topic": "Nitro Cold Brew",
+                "category": "Beverage",
+                "headline": "COOL REFRESHMENT",
+                "aspectRatio": "4:5",
+                "userId": "00000000-0000-0000-0000-000000000000"
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data.get("status"), "completed")
+        self.assertEqual(data.get("headline"), "COOL REFRESHMENT")
+        self.assertTrue(len(data.get("output_url", "")) > 0)
+
+    def test_marketing_poster_optional_topic_and_custom_ratio(self):
+        """Marketing poster gracefully handles empty topic and custom 2:3 aspect ratio."""
+        res = self.client.post(
+            "/api/v1/prompt-engineering/tools/marketing-poster",
+            json={
+                "headline": "SUMMER CLEARANCE",
+                "aspectRatio": "2:3",
+                "language": "Spanish",
+                "userId": "00000000-0000-0000-0000-000000000000"
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data.get("status"), "completed")
+        self.assertEqual(data.get("headline"), "SUMMER CLEARANCE")
+
 if __name__ == "__main__":
     unittest.main()

@@ -93,10 +93,11 @@ class UpscaleResponse(BaseToolResponse):
 # ── Skill 5: Product Detail Images ───────────────────────────────────────────
 class ProductDetailRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
-    image_url: str = Field(..., validation_alias=AliasChoices("image_url", "imageUrl", "photo_url", "url"), description="Hero product image")
-    product_name: str = Field(..., validation_alias=AliasChoices("product_name", "productName", "name", "title"), description="Product title")
+    image_url: Optional[str] = Field(default=None, validation_alias=AliasChoices("image_url", "imageUrl", "photo_url", "url"), description="Hero product image")
+    product_name: Optional[str] = Field(default="Commercial Product", validation_alias=AliasChoices("product_name", "productName", "name", "title"), description="Product title")
     aspect_ratio: str = Field(default="4:5", validation_alias=AliasChoices("aspect_ratio", "aspectRatio", "ratio"), description="Detail ratio")
     language: str = Field(default="Auto", description="Detail copy language")
+    quality: str = Field(default="1k", description="'1k' or '2k'")
     user_id: Optional[str] = Field(default=None, validation_alias=AliasChoices("user_id", "userId"))
 
 class ProductDetailResponse(BaseToolResponse):
@@ -107,7 +108,7 @@ class ProductDetailResponse(BaseToolResponse):
 class MarketingPosterRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
     image_url: Optional[str] = Field(default=None, validation_alias=AliasChoices("image_url", "imageUrl", "photo_url"), description="Optional product/subject image to feature on poster")
-    topic: str = Field(..., description="Poster topic")
+    topic: Optional[str] = Field(default="Commercial Promotion", description="Poster topic")
     category: str = Field(default="Promotion", description="'Beverage', 'Fashion', 'Hiring', 'Flash Sale', 'Promotion'")
     aspect_ratio: str = Field(default="4:5", validation_alias=AliasChoices("aspect_ratio", "aspectRatio", "ratio"), description="Poster ratio")
     language: str = Field(default="Auto", description="Headline language")

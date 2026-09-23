@@ -76,20 +76,53 @@ class PromptCompiler:
         topic: str, 
         category: str = "Commercial", 
         aspect_ratio: str = "4:5",
-        headline: Optional[str] = None
+        headline: Optional[str] = None,
+        language: str = "Auto"
     ) -> str:
         """
         Compiles commercial advertising poster prompts with clear layout,
         bold negative space, and typographic focus tailored for Flux text synthesis.
         """
-        clean_topic = cls.strip_tag_soup(topic)
+        clean_topic = cls.strip_tag_soup(topic or "Special Promotion")
         effective_headline = headline or clean_topic.title()
+
+        lang_clause = ""
+        if language and language.strip().lower() not in ["auto", "auto (match my input)", ""]:
+            lang_clause = f" Typography and headline copy written in {language}."
 
         prompt = (
             f"Commercial advertising poster for '{clean_topic}', {category} design. "
-            f"Clean minimalist Swiss graphic design layout, bold headline typography reading '{effective_headline}'. "
+            f"Clean minimalist Swiss graphic design layout, bold headline typography reading '{effective_headline}'.{lang_clause} "
             f"High contrast editorial color grading, crisp studio rim lighting, generous negative copy space, "
             f"ultra-sharp branding composition formatted for {aspect_ratio} display."
+        )
+        return prompt
+
+    @classmethod
+    def compile_for_marketing_poster_backdrop(
+        cls,
+        topic: str,
+        category: str = "Commercial",
+        aspect_ratio: str = "4:5",
+        headline: Optional[str] = None,
+        language: str = "Auto"
+    ) -> str:
+        """
+        Compiles commercial advertising poster graphic layout backdrop with clean empty hero center space
+        and top headline framing, tailored for compositing user's product without clutter.
+        """
+        clean_topic = cls.strip_tag_soup(topic or "Special Promotion")
+        effective_headline = headline or clean_topic.title()
+
+        lang_clause = ""
+        if language and language.strip().lower() not in ["auto", "auto (match my input)", ""]:
+            lang_clause = f" Typography and headline copy written in {language}."
+
+        prompt = (
+            f"Commercial advertising poster graphic layout backdrop for '{clean_topic}', {category} design. "
+            f"Clean minimalist Swiss graphic design framing, bold headline typography reading '{effective_headline}' placed prominently at top.{lang_clause} "
+            f"Spacious clean negative space and empty central hero zone reserved for product display, no products in center, no foreground objects, "
+            f"high contrast editorial color grading, crisp studio rim lighting, formatted for {aspect_ratio} display."
         )
         return prompt
 
@@ -121,24 +154,30 @@ class PromptCompiler:
             )
 
     @classmethod
-    def compile_for_product_detail_backdrop(cls, product_name: str, style: str = "Modern Minimalist") -> str:
+    def compile_for_product_detail_backdrop(cls, product_name: str = "Product", style: str = "Modern Minimalist") -> str:
         """
         Compiles an empty luxury product showroom stage / cyclo pedestal backdrop
         ready for compositing the user's isolated product without hallucinating duplicate objects.
         """
+        clean_name = cls.strip_tag_soup(product_name or "Product")
         return (
-            f"Empty luxury commercial product showroom stage for {product_name}, {style} aesthetic. "
+            f"Empty luxury commercial product showroom stage for {clean_name}, {style} aesthetic. "
             "Clean empty studio cyclo pedestal, authentic tactile stone and podium textures, soft directional key light with gentle fill, "
             "empty platform ready for product placement, no foreground objects, no duplicate products, 8k commercial presentation."
         )
 
     @classmethod
-    def compile_for_product_detail(cls, product_name: str, style: str = "Modern Minimalist") -> str:
+    def compile_for_product_detail(cls, product_name: str = "Product", style: str = "Modern Minimalist", language: str = "Auto") -> str:
         """
         Compiles e-commerce product feature listing set with macro texture and exploded angle views.
         """
+        clean_name = cls.strip_tag_soup(product_name or "Product")
+        lang_clause = ""
+        if language and language.strip().lower() not in ["auto", "auto (match my input)", ""]:
+            lang_clause = f" Feature annotations and callout text written in {language}."
+
         return (
-            f"Professional e-commerce listing hero shot of {product_name}, {style} aesthetic. "
+            f"Professional e-commerce listing hero shot of {clean_name}, {style} aesthetic.{lang_clause} "
             "Clean studio cyclo pedestal, authentic tactile material texture, soft directional key light with gentle fill, "
             "tack-sharp focus on craftsmanship details, high commercial conversion presentation."
         )
