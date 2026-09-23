@@ -139,5 +139,64 @@ class TestWebCrossPlatformLoopholes(unittest.TestCase):
         self.assertEqual(res_null.status_code, 200)
         self.assertEqual(res_null.json(), [])
 
+
+    # ─────────────────────────────────────────────────────────────
+    # 4. New Aspect Ratios & Dynamic Resolution (Web Team Recommendations)
+    # ─────────────────────────────────────────────────────────────
+    def test_ai_expand_with_new_aspect_ratios(self):
+        """Web passing newly supported ratios (3:4, 4:3, 2:3, 3:2, 5:4) succeeds seamlessly."""
+        for ratio in ["3:4", "4:3", "2:3", "3:2", "5:4"]:
+            res = self.client.post(
+                "/api/v1/prompt-engineering/tools/ai-expand",
+                json={
+                    "imageUrl": self.dummy_b64,
+                    "targetRatio": ratio,
+                    "quality": "2k",
+                    "userId": "00000000-0000-0000-0000-000000000000"
+                }
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertEqual(data.get("status"), "completed")
+            self.assertEqual(data.get("target_ratio"), ratio)
+
+    def test_upscale_returns_dynamic_resolution(self):
+        """Upscale 4K returns dynamic pixel resolution matching actual upscaled output."""
+        res = self.client.post(
+            "/api/v1/prompt-engineering/tools/upscale",
+            json={
+                "imageUrl": self.dummy_b64,
+                "scaleFactor": 2,
+                "userId": "00000000-0000-0000-0000-000000000000"
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data.get("status"), "completed")
+        self.assertIn("x", data.get("resolution", ""))
+        self.assertNotEqual(data.get("resolution"), "4096x4096", "Should return dynamic resolution, not static 4096x4096")
+
+    def test_history_pagination_offset(self):
+        """GET /tools/history supports both limit and offset pagination parameters."""
+        res = self.client.get("/api/v1/prompt-engineering/tools/history?user_id=undefined&limit=10&offset=5")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), [])
+
+    def test_failure_returns_empty_output_url(self):
+        """When an invalid image is passed, failure returns empty output_url."""
+        res = self.client.post(
+            "/api/v1/prompt-engineering/tools/ai-expand",
+            json={
+                "imageUrl": "data:image/png;base64,corrupt_junk_bytes",
+                "targetRatio": "16:9"
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data.get("status"), "failed")
+        self.assertEqual(data.get("output_url"), "")
+        self.assertEqual(data.get("credits_deducted"), 0.0)
+        self.assertIsNotNone(data.get("error_message"))
+
 if __name__ == "__main__":
     unittest.main()

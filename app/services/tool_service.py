@@ -76,6 +76,42 @@ class ToolService:
             b64_str = base64.b64encode(image_bytes).decode("utf-8")
             return f"data:image/png;base64,{b64_str}"
 
+    def _decrement_wallet_credits(self, user_id: Optional[str], amount: float) -> bool:
+        """
+        Attempts to atomically decrement user credits from public.wallets in Supabase.
+        Deducts from free_daily_balance first, then purchased_balance.
+        """
+        if not user_id or user_id == "00000000-0000-0000-0000-000000000000" or amount <= 0:
+            return True
+        try:
+            admin = get_supabase_admin()
+            res = admin.table("wallets").select("*").eq("user_id", user_id).execute()
+            if res and res.data:
+                wallet = res.data[0]
+                free = float(wallet.get("free_daily_balance", 0.0) or 0.0)
+                purchased = float(wallet.get("purchased_balance", 0.0) or 0.0)
+                remaining = amount
+
+                deduct_free = min(free, remaining)
+                new_free = free - deduct_free
+                remaining -= deduct_free
+
+                deduct_purchased = min(purchased, remaining)
+                new_purchased = max(0.0, purchased - deduct_purchased)
+
+                total_gens = int(wallet.get("total_generations", 0) or 0) + 1
+                admin.table("wallets").update({
+                    "free_daily_balance": new_free,
+                    "purchased_balance": new_purchased,
+                    "total_generations": total_gens,
+                    "updated_at": "now()"
+                }).eq("user_id", user_id).execute()
+                logger.info(f"[Wallet] Decremented {amount} credits for user {user_id}")
+                return True
+        except Exception as e:
+            logger.debug(f"[Wallet] Wallet decrement skipped or table pending: {e}")
+        return True
+
     def _persist_job(
         self, 
         user_id: Optional[str], 
@@ -103,6 +139,7 @@ class ToolService:
                 "metadata": metadata
             }).execute()
             logger.info(f"[Jobs DB] Persisted {job_type} job {task_id} for user {user_id}")
+            self._decrement_wallet_credits(user_id, credits)
         except Exception as e:
             logger.debug(f"[Jobs DB] Table insert skipped or pending column: {e}")
 
@@ -141,7 +178,8 @@ class ToolService:
         self,
         user_id: str,
         tool_type: Optional[str] = None,
-        limit: int = 20
+        limit: int = 20,
+        offset: int = 0
     ) -> list:
         """Fetches user tool execution history from tool_generations table."""
         if not user_id or str(user_id).strip().lower() in ("undefined", "null", "none", ""):
@@ -149,7 +187,7 @@ class ToolService:
         try:
             clean_uid = str(user_id).strip()
             admin = get_supabase_admin()
-            query = admin.table("tool_generations").select("*").eq("user_id", clean_uid).order("created_at", desc=True).limit(limit)
+            query = admin.table("tool_generations").select("*").eq("user_id", clean_uid).order("created_at", desc=True).range(offset, offset + limit - 1)
             if tool_type:
                 query = query.eq("tool_type", tool_type)
             res = query.execute()
@@ -224,8 +262,8 @@ class ToolService:
             return RemoveBackgroundResponse(
                 task_id=task_id,
                 status="failed",
-                output_url=req.image_url,
-                cutout_url=req.image_url,
+                output_url="",
+                cutout_url="",
                 credits_deducted=0.0,
                 tokens_consumed=0,
                 error_message=self._format_friendly_error(e, "Background Removal")
@@ -343,6 +381,23 @@ class ToolService:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
 
+                # Aspect ratio & quality dimension mapping
+                dim_map = {
+                    "1:1": (1024, 1024),
+                    "4:5": (896, 1120),
+                    "5:4": (1120, 896),
+                    "9:16": (720, 1280),
+                    "16:9": (1280, 720),
+                    "3:4": (864, 1152),
+                    "4:3": (1152, 864),
+                    "2:3": (832, 1248),
+                    "3:2": (1248, 832),
+                }
+                w, h = dim_map.get(str(req.aspect_ratio).strip(), (1024, 1024))
+                if req.quality == "2k":
+                    w = int(w * 1.5)
+                    h = int(h * 1.5)
+
                 # 2. Compile empty backdrop scene prompt
                 prompt = PromptCompiler.compile_for_ai_background(
                     mode=req.mode,
@@ -356,15 +411,15 @@ class ToolService:
                     try:
                         bg_bytes = await self.hf_client.generate_flux(
                             prompt=prompt,
-                            width=1024,
-                            height=1024,
+                            width=w,
+                            height=h,
                             seed=42
                         )
                     except Exception as gen_err:
                         logger.warning(f"[Skill 2: AI BG] Flux direct error: {gen_err}")
 
                 if not bg_bytes:
-                    fallback_bg_url = self.diffusion_gateway.build_safe_url(prompt, width=1024, height=1024)
+                    fallback_bg_url = self.diffusion_gateway.build_safe_url(prompt, width=w, height=h)
                     try:
                         bg_bytes = await self._fetch_image_bytes(fallback_bg_url)
                     except Exception as fetch_err:
@@ -374,6 +429,8 @@ class ToolService:
                     bg_img = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
                     # 4. Intelligently composite user's exact subject onto backdrop with natural contact shadow
                     final_rgb = await asyncio.to_thread(self._composite_subject_on_backdrop, cutout_img, bg_img)
+                    if req.quality == "2k":
+                        final_rgb = final_rgb.filter(ImageFilter.UnsharpMask(radius=2, percent=125, threshold=3))
                     out_io = io.BytesIO()
                     final_rgb.save(out_io, format="PNG", optimize=True)
                     output_bytes = out_io.getvalue()
@@ -422,7 +479,7 @@ class ToolService:
             return AiBackgroundResponse(
                 task_id=task_id,
                 status="failed",
-                output_url=req.image_url,
+                output_url="",
                 mode=req.mode,
                 credits_deducted=0.0,
                 tokens_consumed=0,
@@ -430,9 +487,9 @@ class ToolService:
             )
 
     @staticmethod
-    def _expand_image_canvas(src_img: Image.Image, target_ratio: str) -> Image.Image:
+    def _expand_image_canvas(src_img: Image.Image, target_ratio: str, quality: str = "1k") -> Image.Image:
         """
-        Extends image canvas to the requested target aspect ratio (16:9, 9:16, 4:5, 1:1)
+        Extends image canvas to the requested target aspect ratio (16:9, 9:16, 4:5, 5:4, 1:1, 3:4, 4:3, 2:3, 3:2, etc.)
         while preserving 100% of the original image content intact and seamlessly blending
         the extended margins with content-aware atmospheric ambient outpainting.
         """
@@ -442,9 +499,26 @@ class ToolService:
             "16:9": 16.0 / 9.0,
             "9:16": 9.0 / 16.0,
             "4:5": 4.0 / 5.0,
+            "5:4": 5.0 / 4.0,
             "1:1": 1.0,
+            "3:4": 3.0 / 4.0,
+            "4:3": 4.0 / 3.0,
+            "2:3": 2.0 / 3.0,
+            "3:2": 3.0 / 2.0,
+            "21:9": 21.0 / 9.0,
+            "9:21": 9.0 / 21.0,
         }
-        target_ratio_val = ratio_map.get(target_ratio, 16.0 / 9.0)
+        clean_ratio = str(target_ratio).strip()
+        if clean_ratio in ratio_map:
+            target_ratio_val = ratio_map[clean_ratio]
+        elif ":" in clean_ratio:
+            try:
+                parts = clean_ratio.split(":")
+                target_ratio_val = float(parts[0]) / float(parts[1])
+            except Exception:
+                target_ratio_val = 16.0 / 9.0
+        else:
+            target_ratio_val = 16.0 / 9.0
         orig_ratio = orig_w / orig_h
 
         if orig_ratio < target_ratio_val:
@@ -454,7 +528,7 @@ class ToolService:
             target_w = orig_w
             target_h = int(orig_w / target_ratio_val)
 
-        max_dim = 2048
+        max_dim = 3072 if quality == "2k" else 2048
         if max(target_w, target_h) > max_dim:
             scale = max_dim / max(target_w, target_h)
             target_w = max(1, int(target_w * scale))
@@ -482,6 +556,8 @@ class ToolService:
                     draw.rectangle([x0, y0, x1, y1], outline=alpha)
 
         bg_fill.paste(src_img, (pos_x, pos_y), mask)
+        if quality == "2k":
+            bg_fill = bg_fill.filter(ImageFilter.UnsharpMask(radius=2, percent=120, threshold=3))
         return bg_fill
 
     # ── Skill 3: AI Expand ────────────────────────────────────────────────────
@@ -495,7 +571,7 @@ class ToolService:
             src_img = Image.open(io.BytesIO(input_bytes)).convert("RGB")
 
             # Expand canvas while 100% preserving original content intact
-            expanded_img = await asyncio.to_thread(self._expand_image_canvas, src_img, req.target_ratio)
+            expanded_img = await asyncio.to_thread(self._expand_image_canvas, src_img, req.target_ratio, req.quality)
             out_io = io.BytesIO()
             expanded_img.save(out_io, format="PNG", optimize=True)
             output_bytes = out_io.getvalue()
@@ -536,7 +612,7 @@ class ToolService:
             return AiExpandResponse(
                 task_id=task_id,
                 status="failed",
-                output_url=req.image_url,
+                output_url="",
                 target_ratio=req.target_ratio,
                 credits_deducted=0.0,
                 tokens_consumed=0,
@@ -552,7 +628,7 @@ class ToolService:
             logger.info(f"[Skill 4: Upscale 4K] Scale factor: {req.scale_factor} | Image: {req.image_url[:60]}...")
             input_bytes = await self._fetch_image_bytes(req.image_url)
 
-            def _upscale_cpu(raw_bytes: bytes) -> bytes:
+            def _upscale_cpu(raw_bytes: bytes) -> tuple:
                 img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
                 w, h = img.size
                 factor = min(req.scale_factor, 4)
@@ -561,9 +637,9 @@ class ToolService:
                 img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=140, threshold=3))
                 out_io = io.BytesIO()
                 img.save(out_io, format="PNG", optimize=True)
-                return out_io.getvalue()
+                return out_io.getvalue(), f"{new_w}x{new_h}"
 
-            output_bytes = await asyncio.to_thread(_upscale_cpu, input_bytes)
+            output_bytes, dynamic_resolution = await asyncio.to_thread(_upscale_cpu, input_bytes)
             output_url = await self._upload_to_supabase(output_bytes, "upscaled_4k")
             latency_ms = int((time.time() - t0) * 1000)
 
@@ -591,7 +667,7 @@ class ToolService:
                 task_id=task_id,
                 status="completed",
                 output_url=output_url,
-                resolution="4096x4096",
+                resolution=dynamic_resolution,
                 credits_deducted=2.0,
                 tokens_consumed=0
             )
@@ -600,8 +676,8 @@ class ToolService:
             return UpscaleResponse(
                 task_id=task_id,
                 status="failed",
-                output_url=req.image_url,
-                resolution="1024x1024",
+                output_url="",
+                resolution="0x0",
                 credits_deducted=0.0,
                 tokens_consumed=0,
                 error_message=self._format_friendly_error(e, "Upscale 4K")
@@ -622,6 +698,18 @@ class ToolService:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
 
+                # Dynamic dimensions based on product detail ratio
+                prod_dim_map = {
+                    "1:1": (1024, 1024),
+                    "4:5": (896, 1120),
+                    "5:4": (1120, 896),
+                    "9:16": (720, 1280),
+                    "16:9": (1280, 720),
+                    "3:4": (864, 1152),
+                    "4:3": (1152, 864),
+                }
+                w, h = prod_dim_map.get(str(req.aspect_ratio).strip(), (896, 1120))
+
                 # 2. Compile empty luxury showroom pedestal backdrop prompt
                 backdrop_prompt = PromptCompiler.compile_for_product_detail_backdrop(
                     product_name=req.product_name
@@ -633,15 +721,15 @@ class ToolService:
                     try:
                         bg_bytes = await self.hf_client.generate_flux(
                             prompt=backdrop_prompt,
-                            width=896,
-                            height=1120,
+                            width=w,
+                            height=h,
                             seed=42
                         )
                     except Exception as err:
                         logger.warning(f"[Skill 5: Product Detail] Flux err: {err}")
 
                 if not bg_bytes:
-                    fallback_url = self.diffusion_gateway.build_safe_url(backdrop_prompt, width=896, height=1120)
+                    fallback_url = self.diffusion_gateway.build_safe_url(backdrop_prompt, width=w, height=h)
                     try:
                         bg_bytes = await self._fetch_image_bytes(fallback_url)
                     except Exception as fetch_err:
@@ -668,13 +756,13 @@ class ToolService:
                 prompt = PromptCompiler.compile_for_product_detail(product_name=req.product_name)
                 if self.hf_client:
                     try:
-                        flux_bytes = await self.hf_client.generate_flux(prompt=prompt, width=896, height=1120, seed=42)
+                        flux_bytes = await self.hf_client.generate_flux(prompt=prompt, width=w, height=h, seed=42)
                         if flux_bytes:
                             output_url = await self._upload_to_supabase(flux_bytes, "product_details")
                     except Exception as err:
                         logger.warning(f"[Skill 5: Product Detail] Flux err: {err}")
                 if not output_url:
-                    output_url = self.diffusion_gateway.build_safe_url(prompt, width=896, height=1120)
+                    output_url = self.diffusion_gateway.build_safe_url(prompt, width=w, height=h)
 
             latency_ms = int((time.time() - t0) * 1000)
             self._persist_job(
@@ -710,7 +798,7 @@ class ToolService:
             return ProductDetailResponse(
                 task_id=task_id,
                 status="failed",
-                output_url=req.image_url,
+                output_url="",
                 product_name=req.product_name,
                 credits_deducted=0.0,
                 tokens_consumed=0,
@@ -724,11 +812,21 @@ class ToolService:
         t0 = time.time()
         try:
             logger.info(f"[Skill 6: Marketing Poster] Topic: {req.topic} | Category: {req.category} | Image: {req.image_url[:60] if req.image_url else 'None'}...")
-            w, h = 896, 1120  # Standard 4:5 commercial vertical poster
-            if req.aspect_ratio == "9:16":
-                w, h = 720, 1280
-            elif req.aspect_ratio == "1:1":
-                w, h = 1024, 1024
+            poster_dim_map = {
+                "4:5": (896, 1120),
+                "5:4": (1120, 896),
+                "9:16": (720, 1280),
+                "16:9": (1280, 720),
+                "1:1": (1024, 1024),
+                "3:4": (864, 1152),
+                "4:3": (1152, 864),
+                "2:3": (832, 1248),
+                "3:2": (1248, 832),
+            }
+            w, h = poster_dim_map.get(str(req.aspect_ratio).strip(), (896, 1120))
+            if req.quality == "2k":
+                w = int(w * 1.5)
+                h = int(h * 1.5)
 
             prompt = PromptCompiler.compile_for_marketing_poster(
                 topic=req.topic,
@@ -817,7 +915,7 @@ class ToolService:
             return MarketingPosterResponse(
                 task_id=task_id,
                 status="failed",
-                output_url=req.image_url or FALLBACK_TOOL_IMAGE,
+                output_url="",
                 topic=req.topic,
                 headline=req.topic,
                 credits_deducted=0.0,
