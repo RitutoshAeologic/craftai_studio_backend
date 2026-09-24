@@ -145,15 +145,17 @@ class PromptCompiler:
             return "Seamless pure white infinity cyclo studio backdrop, subtle soft contact floor shadow, clean commercial e-commerce lighting."
         elif clean_mode == "smart":
             return (
-                "Empty high-end architectural minimalist podium surface and backdrop, clean empty studio stage, "
-                "smooth beige travertine stone texture, gentle diffused morning sunlight casting soft geometric shadows, "
-                "shallow depth of field, f/2.8 lens blur, spacious center for product placement, no foreground objects, no products, premium catalog aesthetic."
+                "Empty luxury architectural minimalist photography studio backdrop, elegant neutral textured wall, smooth warm travertine and limestone surfaces, "
+                "soft gentle morning atmospheric sunlight casting diffused geometric shadows, shallow depth of field, f/2.8 lens blur, "
+                "spacious clean empty center, completely vacant room, no people, no humans, no women, no models, no faces, no silhouettes, "
+                "no foreground objects, no clutter, pristine high-end editorial photo studio background."
             )
         else:
-            backdrop = custom_backdrop or "modern minimalist aesthetic studio"
+            clean_backdrop = cls.strip_tag_soup(custom_backdrop or "modern minimalist aesthetic studio")
             return (
-                f"Empty photographic commercial backdrop scene: {backdrop}, "
-                f"clean empty center surface and platform ready for product display, no foreground objects, no products, professional softbox illumination, cinematic bokeh."
+                f"Empty photographic commercial studio backdrop scene: {clean_backdrop}, "
+                "clean empty spacious center ready for subject display, completely vacant environment, no people, no humans, no persons, no faces, "
+                "no foreground objects, professional softbox illumination, cinematic bokeh, clean atmospheric background."
             )
 
     @classmethod

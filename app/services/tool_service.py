@@ -226,7 +226,7 @@ class ToolService:
         try:
             logger.info(f"[Skill 1: Remove BG] Processing image: {req.image_url[:60]}...")
             input_bytes = await self._fetch_image_bytes(req.image_url)
-            output_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+            output_bytes = await asyncio.to_thread(rembg.remove, input_bytes, False, 240, 10, 10, None, False, True)
             output_url = await self._upload_to_supabase(output_bytes, "transparent_cutouts")
 
             latency_ms = int((time.time() - t0) * 1000)
@@ -269,16 +269,43 @@ class ToolService:
                 error_message=self._format_friendly_error(e, "Background Removal")
             )
 
+    async def _fetch_clean_fallback_background(self, prompt: str, width: int, height: int, model: str = "flux") -> Optional[bytes]:
+        """
+        Fetches an AI background scene via the fallback gateway while cleanly trimming away
+        any third-party watermarks (e.g. Pollinations watermark at bottom right).
+        Requests height + 80, then crops to exact (width, height), guaranteeing zero logo/watermark.
+        """
+        fetch_h = height + 80
+        fallback_url = self.diffusion_gateway.build_safe_url(prompt, width=width, height=fetch_h, model=model)
+        try:
+            raw_bytes = await self._fetch_image_bytes(fallback_url)
+            raw_img = Image.open(io.BytesIO(raw_bytes)).convert("RGBA")
+            clean_img = raw_img.crop((0, 0, width, height))
+            buf = io.BytesIO()
+            clean_img.save(buf, format="PNG")
+            return buf.getvalue()
+        except Exception as e:
+            logger.warning(f"[ToolService] Clean fallback background fetch error: {e}")
+            return None
+
     @staticmethod
     def _composite_subject_on_backdrop(cutout_rgba: Image.Image, bg_rgba: Image.Image, placement: str = "ground") -> Image.Image:
         """
         Intelligently composites an isolated foreground subject onto a generated background:
         1. Tight bounding box cropping to eliminate dead alpha margins.
-        2. Proportional scaling preserving aspect ratio (filling ~65-72% of canvas without artificial clamp).
-        3. Placement modes:
-           - 'ground': realistic ground-level placement on pedestal/floor with soft contact shadow.
-           - 'center': hero-centered placement (ideal for posters) with natural silhouette drop shadow.
+        2. Detects whether the subject was cut off at the bottom frame (Portrait/Bust shot)
+           vs a standalone grounded object (e.g. perfume, bottle, shoe, chair, full-body).
+        3. For Portraits/Busts:
+           - Anchored directly flush to the bottom edge (pos_y = bg_h - new_h) so they never float awkwardly.
+           - Proportional scaling (fills ~82-88% canvas height) for majestic studio framing.
+           - Soft silhouette depth ambient shadow behind the subject, with ZERO floor contact shadow.
+        4. For Grounded Freestanding Objects:
+           - Realistic pedestal/floor baseline (around 82% height).
+           - Natural contact floor shadow under the base.
+        5. For Center placement (Posters):
+           - Centered hero composition with silhouette contour drop shadow.
         """
+        orig_w, orig_h = cutout_rgba.size
         bbox = cutout_rgba.getbbox()
         subject = cutout_rgba.crop(bbox) if bbox else cutout_rgba
 
@@ -288,36 +315,68 @@ class ToolService:
         if sub_w <= 0 or sub_h <= 0:
             return bg_rgba.convert("RGB")
 
-        # Scale subject to occupy 65-72% of canvas height or width (natural commercial staging)
-        max_w = int(bg_w * 0.70)
-        max_h = int(bg_h * 0.70)
-        scale = min(max_w / sub_w, max_h / sub_h)
-        new_w = max(1, int(sub_w * scale))
-        new_h = max(1, int(sub_h * scale))
-        subject_scaled = subject.resize((new_w, new_h), resample=Image.Resampling.LANCZOS)
+        # Detect if subject touches bottom edge of original photo (framed portrait, bust, avatar)
+        touches_bottom = bool(bbox and bbox[3] >= orig_h - 6)
 
         composite = bg_rgba.copy()
 
         if placement == "center":
-            # Center horizontally & vertically with slight 4% downward offset for headline headroom
+            max_w = int(bg_w * 0.70)
+            max_h = int(bg_h * 0.70)
+            scale = min(max_w / sub_w, max_h / sub_h)
+            new_w = max(1, int(sub_w * scale))
+            new_h = max(1, int(sub_h * scale))
+            subject_scaled = subject.resize((new_w, new_h), resample=Image.Resampling.LANCZOS)
+
             pos_x = (bg_w - new_w) // 2
             pos_y = max(int(bg_h * 0.08), min((bg_h - new_h) // 2 + int(bg_h * 0.04), bg_h - new_h - int(bg_h * 0.04)))
 
-            # Ambient silhouette drop shadow matching the subject's contours
             alpha = subject_scaled.split()[-1]
             shadow_mask = alpha.filter(ImageFilter.GaussianBlur(radius=max(6, int(min(new_w, new_h) * 0.035))))
             shadow_img = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
             shadow_tint = Image.new("RGBA", (new_w, new_h), (12, 12, 16, 110))
             shadow_img.paste(shadow_tint, (0, 0), shadow_mask)
 
-            # Offset drop shadow slightly down & right
             shadow_offset_x = pos_x + max(2, int(new_w * 0.015))
             shadow_offset_y = pos_y + max(4, int(new_h * 0.025))
 
             composite.paste(shadow_img, (shadow_offset_x, shadow_offset_y), shadow_img)
             composite.paste(subject_scaled, (pos_x, pos_y), subject_scaled)
+
+        elif touches_bottom:
+            # ── PORTRAIT / BUST SHOT (Subject sliced off at bottom of camera frame) ──
+            # Scale proportionally so the person fills ~82-88% height for a professional portrait shot
+            max_w = int(bg_w * 0.90)
+            max_h = int(bg_h * 0.88)
+            scale = min(max_w / sub_w, max_h / sub_h)
+            new_w = max(1, int(sub_w * scale))
+            new_h = max(1, int(sub_h * scale))
+            subject_scaled = subject.resize((new_w, new_h), resample=Image.Resampling.LANCZOS)
+
+            # Center horizontally, anchor strictly to the bottom of the canvas (ZERO floating!)
+            pos_x = (bg_w - new_w) // 2
+            pos_y = bg_h - new_h
+
+            # Soft ambient silhouette depth shadow BEHIND the person (adds studio 3D depth, NO floor shadow)
+            alpha = subject_scaled.split()[-1]
+            shadow_radius = max(6, int(min(new_w, new_h) * 0.025))
+            shadow_mask = alpha.filter(ImageFilter.GaussianBlur(radius=shadow_radius))
+            shadow_img = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
+            shadow_tint = Image.new("RGBA", (new_w, new_h), (12, 12, 16, 65))
+            shadow_img.paste(shadow_tint, (0, 0), shadow_mask)
+
+            composite.paste(shadow_img, (pos_x, pos_y), shadow_img)
+            composite.paste(subject_scaled, (pos_x, pos_y), subject_scaled)
+
         else:
-            # Ground placement: baseline around 82% of background height
+            # ── FREESTANDING GROUNDED OBJECT (Bottle, Shoe, Bag, Chair, Full Body) ──
+            max_w = int(bg_w * 0.70)
+            max_h = int(bg_h * 0.70)
+            scale = min(max_w / sub_w, max_h / sub_h)
+            new_w = max(1, int(sub_w * scale))
+            new_h = max(1, int(sub_h * scale))
+            subject_scaled = subject.resize((new_w, new_h), resample=Image.Resampling.LANCZOS)
+
             pos_x = (bg_w - new_w) // 2
             pos_y = int(bg_h * 0.82) - new_h
             pos_y = max(int(bg_h * 0.08), min(pos_y, bg_h - new_h - int(bg_h * 0.04)))
@@ -432,7 +491,7 @@ class ToolService:
             clean_mode = str(req.mode or "pure_white").strip().lower().replace("-", "_").replace(" ", "_")
             if clean_mode in ("pure_white", "purewhite", "white", "studio_white"):
                 # 1. Local CPU Cutout
-                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, False, 240, 10, 10, None, False, True)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
 
                 # Resolve target canvas dimensions respecting aspect_ratio and quality
@@ -484,7 +543,7 @@ class ToolService:
                 )
             else:
                 # 1. Extract subject cutout using rembg so user's original object is 100% PRESERVED
-                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, False, 240, 10, 10, None, False, True)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
 
                 # Resolve dimensions dynamically matching aspect ratio
@@ -516,11 +575,7 @@ class ToolService:
                         logger.warning(f"[Skill 2: AI BG] Flux direct error: {gen_err}")
 
                 if not bg_bytes:
-                    fallback_bg_url = self.diffusion_gateway.build_safe_url(prompt, width=w, height=h)
-                    try:
-                        bg_bytes = await self._fetch_image_bytes(fallback_bg_url)
-                    except Exception as fetch_err:
-                        logger.warning(f"[Skill 2: AI BG] Fallback bg fetch error: {fetch_err}")
+                    bg_bytes = await self._fetch_clean_fallback_background(prompt, width=w, height=h)
 
                 if bg_bytes:
                     bg_img = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
@@ -821,7 +876,7 @@ class ToolService:
             if req.image_url and req.image_url.strip():
                 # 1. Fetch user's uploaded product and extract transparent cutout
                 input_bytes = await self._fetch_image_bytes(req.image_url)
-                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, False, 240, 10, 10, None, False, True)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
 
                 # If ratio is Auto, dynamically match input image aspect ratio
@@ -852,11 +907,7 @@ class ToolService:
                         logger.warning(f"[Skill 5: Product Detail] Flux err: {err}")
 
                 if not bg_bytes:
-                    fallback_url = self.diffusion_gateway.build_safe_url(backdrop_prompt, width=w, height=h)
-                    try:
-                        bg_bytes = await self._fetch_image_bytes(fallback_url)
-                    except Exception as fetch_err:
-                        logger.warning(f"[Skill 5: Product Detail] Fallback bg fetch error: {fetch_err}")
+                    bg_bytes = await self._fetch_clean_fallback_background(backdrop_prompt, width=w, height=h)
 
                 if bg_bytes:
                     bg_img = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
@@ -962,7 +1013,7 @@ class ToolService:
             if req.image_url and req.image_url.strip():
                 # Extract product cutout and composite onto specialized poster layout backdrop
                 input_bytes = await self._fetch_image_bytes(req.image_url)
-                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, False, 240, 10, 10, None, False, True)
                 cutout_img = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
 
                 # If ratio is Auto, dynamically match input image aspect ratio
@@ -991,11 +1042,7 @@ class ToolService:
                         logger.warning(f"[Skill 6: Marketing Poster] Flux err: {err}")
 
                 if not bg_bytes:
-                    fallback_url = self.diffusion_gateway.build_safe_url(backdrop_prompt, width=w, height=h)
-                    try:
-                        bg_bytes = await self._fetch_image_bytes(fallback_url)
-                    except Exception as fetch_err:
-                        logger.warning(f"[Skill 6: Marketing Poster] Fallback bg fetch error: {fetch_err}")
+                    bg_bytes = await self._fetch_clean_fallback_background(backdrop_prompt, width=w, height=h)
 
                 if bg_bytes:
                     bg_img = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
