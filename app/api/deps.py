@@ -80,3 +80,9 @@ def get_remix_service(
 ) -> RemixService:
     service = prompt_service if isinstance(prompt_service, PromptService) else get_prompt_service()
     return RemixService(prompt_service=service)
+
+from app.services.library_service import LibraryService
+
+@lru_cache()
+def get_library_service() -> LibraryService:
+    return LibraryService()
