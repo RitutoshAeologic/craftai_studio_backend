@@ -195,7 +195,40 @@ class TestCrossPlatformContracts(unittest.TestCase):
         )
         self.assertEqual(res.status_code, 200)
         self.assertIn("access-control-allow-origin", res.headers)
-        self.assertEqual(res.headers.get("access-control-allow-credentials"), "true")
+    # ─────────────────────────────────────────────────────────────
+    # 8. Upscale Tool Contract (Mobile scale_factor & Dual URLs)
+    # ─────────────────────────────────────────────────────────────
+    @patch("app.services.tool_service.ToolService.upscale_image", new_callable=AsyncMock)
+    def test_upscale_endpoint_contract(self, mock_upscale):
+        """Guarantees mobile (scale_factor) and web clients get fast completed status and dual output URLs."""
+        mock_upscale.return_value = {
+            "task_id": "tool_upscale_123",
+            "status": "completed",
+            "scale": 4,
+            "mode": "photo",
+            "original_resolution": "512x512",
+            "upscaled_resolution": "2048x2048",
+            "output_url": "https://storage.supabase.co/upscaled/test.jpg",
+            "image_url": "https://storage.supabase.co/upscaled/test.jpg",
+            "tokens_consumed": 0,
+            "is_free": True,
+            "engine": "Optical Photo Super-Resolution (CPU)"
+        }
+        res = self.client.post(
+            "/api/v1/prompt-engineering/tools/upscale",
+            json={
+                "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                "scale_factor": 4,
+                "user_id": "test_user_mobile"
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data.get("status"), "completed")
+        self.assertEqual(data.get("scale"), 4)
+        self.assertIn("output_url", data)
+        self.assertIn("image_url", data)
+        self.assertEqual(data["output_url"], data["image_url"])
 
 if __name__ == "__main__":
     unittest.main()

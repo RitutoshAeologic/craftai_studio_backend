@@ -7,6 +7,7 @@ from app.infrastructure.clients.gemini_llm_client import GeminiLLMClient
 from app.infrastructure.clients.gemini_client import GeminiVisionClient
 from app.infrastructure.clients.pollinations_client import PollinationsClient
 from app.infrastructure.clients.huggingface_client import HuggingFaceClient
+from app.infrastructure.clients.onnx_upscaler_client import OnnxUpscalerClient
 from app.infrastructure.storage.task_store import ITaskStore, ThreadSafeInMemoryTaskStore
 from app.services.prompt_service import PromptService
 from app.services.vision_service import VisionService
@@ -38,6 +39,10 @@ def get_huggingface_client() -> HuggingFaceClient:
     return HuggingFaceClient()
 
 @lru_cache()
+def get_onnx_upscaler_client() -> OnnxUpscalerClient:
+    return OnnxUpscalerClient()
+
+@lru_cache()
 def get_prompt_service() -> PromptService:
     return PromptService()
 
@@ -48,9 +53,15 @@ def get_vision_service(
 
 def get_tool_service(
     diffusion_gateway: IDiffusionGateway = Depends(get_diffusion_gateway),
-    task_store: ITaskStore = Depends(get_task_store)
+    task_store: ITaskStore = Depends(get_task_store),
+    hf_client: HuggingFaceClient = Depends(get_huggingface_client),
+    onnx_client: OnnxUpscalerClient = Depends(get_onnx_upscaler_client)
 ) -> ToolService:
-    return ToolService(diffusion_gateway=diffusion_gateway, task_store=task_store)
+    gateway = diffusion_gateway if isinstance(diffusion_gateway, IDiffusionGateway) else get_diffusion_gateway()
+    store = task_store if isinstance(task_store, ITaskStore) else get_task_store()
+    hf = hf_client if isinstance(hf_client, HuggingFaceClient) else get_huggingface_client()
+    onnx_c = onnx_client if isinstance(onnx_client, OnnxUpscalerClient) else get_onnx_upscaler_client()
+    return ToolService(diffusion_gateway=gateway, task_store=store, hf_client=hf, onnx_client=onnx_c)
 
 def get_generation_service(
     diffusion_gateway: IDiffusionGateway = Depends(get_diffusion_gateway),

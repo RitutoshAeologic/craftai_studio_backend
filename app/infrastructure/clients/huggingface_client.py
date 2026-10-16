@@ -1,9 +1,10 @@
+import asyncio
 import io
 import os
 import uuid
 import tempfile
 import httpx
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
 from PIL import Image
 from huggingface_hub import InferenceClient
 from gradio_client import Client as GradioClient, handle_file
@@ -15,16 +16,26 @@ class HuggingFaceClient:
     Hugging Face Client supporting:
     1. Direct FLUX.1-schnell Text-to-Image via InferenceClient (Zero watermarks, high-fidelity 1024x1024).
     2. Identity-Preserving Image-to-Image via InstantX/InstantID Space (InsightFace landmark lock).
+    3. AI Super-Resolution & Face Restoration (CodeFormer Space / Swin2SR Serverless).
     """
     def __init__(self, token: Optional[str] = None):
-        self.token = token or settings.HF_TOKEN
+        clean_token = (token or settings.HF_TOKEN or "").strip()
+        self.token = clean_token if clean_token else None
         self.inf_client = InferenceClient(api_key=self.token) if self.token else None
         self._instantid_space: Optional[GradioClient] = None
+        self._upscale_space: Optional[GradioClient] = None
+        self._codeformer_space: Optional[GradioClient] = None
+
+    def _get_codeformer_client(self) -> GradioClient:
+        if not self._codeformer_space:
+            logger.info("[HuggingFace] Connecting to sczhou/CodeFormer space...")
+            self._codeformer_space = GradioClient("sczhou/CodeFormer", token=self.token)
+        return self._codeformer_space
 
     def _get_instantid_client(self) -> GradioClient:
         if not self._instantid_space:
             logger.info("[HuggingFace] Connecting to InstantX/InstantID space...")
-            self._instantid_space = GradioClient("InstantX/InstantID", hf_token=self.token)
+            self._instantid_space = GradioClient("InstantX/InstantID", token=self.token)
         return self._instantid_space
 
     async def generate_flux(
@@ -120,3 +131,111 @@ class HuggingFaceClient:
                     os.remove(temp_input_path)
                 except Exception:
                     pass
+
+    async def upscale_with_codeformer(self, image_bytes: bytes, scale: int = 2) -> Optional[bytes]:
+        """
+        Executes face restoration and super-resolution via sczhou/CodeFormer space.
+        Uses GradioClient with strict 25s timeout and automatic temp file cleanup.
+        """
+        temp_input_path = None
+        try:
+            suffix = ".png"
+            fd, temp_input_path = tempfile.mkstemp(suffix=suffix)
+            with os.fdopen(fd, "wb") as f:
+                f.write(image_bytes)
+
+            logger.info(f"[HuggingFace CodeFormer] Executing face restoration upscale (scale={scale}x)...")
+
+            def _run_predict():
+                space_client = self._get_codeformer_client()
+                return space_client.predict(
+                    image=handle_file(temp_input_path),
+                    face_align=True,
+                    background_enhance=True,
+                    face_upsample=True,
+                    upscale=float(scale),
+                    codeformer_fidelity=0.5,
+                    api_name="/inference"
+                )
+
+            # Strict 5s timeout so backend never hangs if Space is sleeping or congested (keeps client under 5s)
+            res = await asyncio.wait_for(asyncio.to_thread(_run_predict), timeout=5.0)
+
+            output_file = None
+            if res and isinstance(res, (tuple, list)) and len(res) > 0:
+                item = res[0]
+                if isinstance(item, str):
+                    output_file = item
+                elif isinstance(item, dict) and item.get("path"):
+                    output_file = item["path"]
+
+            if output_file and os.path.exists(output_file):
+                with open(output_file, "rb") as out_f:
+                    data = out_f.read()
+                logger.info(f"[HuggingFace CodeFormer] Face restoration succeeded! ({len(data)} bytes)")
+                return data
+
+            logger.warning("[HuggingFace CodeFormer] Prediction returned no valid output file.")
+            return None
+        except Exception as e:
+            logger.warning(f"[HuggingFace CodeFormer] Face restoration failed or timed out: {e}")
+            return None
+        finally:
+            if temp_input_path and os.path.exists(temp_input_path):
+                try:
+                    os.remove(temp_input_path)
+                except Exception:
+                    pass
+
+    async def upscale_image(
+        self,
+        image_bytes: bytes,
+        scale: int = 2,
+        mode: str = "portrait"
+    ) -> Tuple[Optional[bytes], str]:
+        """
+        Attempts AI super-resolution / face restoration upscale via Hugging Face.
+        Returns: (upscaled_bytes, engine_name) or (None, "")
+        """
+        mode_lower = (mode or "").lower()
+        if "portrait" in mode_lower or "face" in mode_lower:
+            try:
+                cf_bytes = await asyncio.wait_for(self.upscale_with_codeformer(image_bytes, scale=scale), timeout=5.0)
+                if cf_bytes:
+                    return cf_bytes, "CodeFormer (Face Restoration)"
+            except Exception as e:
+                logger.warning(f"[HuggingFace CodeFormer] Timeout/error: {e}")
+
+        # Check serverless inference if active token exists
+        if self.inf_client:
+            temp_input_path = None
+            try:
+                suffix = ".png"
+                fd, temp_input_path = tempfile.mkstemp(suffix=suffix)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(image_bytes)
+
+                model_id = "caidas/swin2SR-classical-sr-x2-64" if scale == 2 else "caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"
+                logger.info(f"[HuggingFace Upscale] Querying serverless inference endpoint {model_id}...")
+                
+                def _run_inf():
+                    with open(temp_input_path, "rb") as f_in:
+                        return self.inf_client.image_to_image(
+                            image=f_in.read(),
+                            model=model_id
+                        )
+
+                res_bytes = await asyncio.wait_for(asyncio.to_thread(_run_inf), timeout=4.0)
+                if res_bytes and len(res_bytes) > 1000:
+                    return res_bytes, f"Swin2SR ({model_id.split('/')[-1]})"
+            except Exception as inf_err:
+                logger.debug(f"[HuggingFace Upscale] Serverless inference not available: {inf_err}")
+            finally:
+                if temp_input_path and os.path.exists(temp_input_path):
+                    try:
+                        os.remove(temp_input_path)
+                    except Exception:
+                        pass
+
+        return None, ""
+

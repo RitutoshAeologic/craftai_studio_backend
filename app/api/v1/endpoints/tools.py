@@ -1,7 +1,14 @@
 from fastapi import APIRouter, Depends
 from app.api.deps import get_tool_service
 from app.services.tool_service import ToolService
-from app.schemas.tools import ToolPresetRequest, ToolPresetResponse, RemoveBackgroundRequest, RemoveBackgroundResponse
+from app.schemas.tools import (
+    ToolPresetRequest,
+    ToolPresetResponse,
+    RemoveBackgroundRequest,
+    RemoveBackgroundResponse,
+    UpscaleRequest,
+    UpscaleResponse,
+)
 
 router = APIRouter(tags=["Zero-Token Tools"])
 
@@ -20,3 +27,12 @@ async def tool_remove_background(
 ):
     """Zero-Token local CPU background removal (transparent PNG output, zero API cost)."""
     return await service.remove_background(req)
+
+@router.post("/tools/upscale", response_model=UpscaleResponse)
+async def tool_upscale(
+    req: UpscaleRequest,
+    service: ToolService = Depends(get_tool_service)
+):
+    """Zero-Token 2X-4X Super-Resolution Upscaling (photo, anime, portrait, fast modes)."""
+    return await service.upscale_image(req)
+
