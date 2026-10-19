@@ -33,6 +33,9 @@ async def tool_upscale(
     req: UpscaleRequest,
     service: ToolService = Depends(get_tool_service)
 ):
-    """Zero-Token 2X-4X Super-Resolution Upscaling (photo, anime, portrait, fast modes)."""
+    """
+    Sub-second Super-Resolution Detail Upscaler (2X HD / 4X Ultra 4K).
+    Zero-Token, sub-second execution, preserving micro-textures & aspect ratio.
+    """
     return await service.upscale_image(req)
 
