@@ -58,3 +58,11 @@ async def get_current_user(
         logger.warning(f"Token verification notice: {e}. Falling back to dev context.")
 
     return dev_user
+
+def invalidate_token(token: str) -> bool:
+    """Invalidates cached token during logout/session revocation."""
+    if token in _TOKEN_CACHE:
+        del _TOKEN_CACHE[token]
+        return True
+    return False
+
