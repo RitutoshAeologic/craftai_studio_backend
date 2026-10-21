@@ -25,6 +25,7 @@ class RemoveBackgroundResponse(BaseModel):
     status: str
     output_url: str
     cutout_url: str = Field(default="", description="Alias to output_url for web clients")
+    image_url: str = Field(default="", description="Alias to output_url for mobile clients")
     tokens_consumed: int = 0
 
 class UpscaleRequest(BaseModel):

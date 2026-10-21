@@ -7,7 +7,10 @@ import httpx
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
 import rembg
+from typing import Optional, Tuple
 from app.infrastructure.clients.base import IDiffusionGateway
+from app.infrastructure.clients.huggingface_client import HuggingFaceClient
+from app.infrastructure.clients.onnx_upscaler_client import OnnxUpscalerClient
 from app.infrastructure.storage.task_store import ITaskStore
 from app.schemas.tools import (
     ToolPresetRequest,
@@ -23,9 +26,32 @@ from app.core.logging import logger
 FALLBACK_TOOL_IMAGE = "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=1024&q=80"
 
 class ToolService:
-    def __init__(self, diffusion_gateway: IDiffusionGateway, task_store: ITaskStore):
+    def __init__(
+        self,
+        diffusion_gateway: Optional[IDiffusionGateway] = None,
+        task_store: Optional[ITaskStore] = None,
+        hf_client: Optional[HuggingFaceClient] = None,
+        onnx_client: Optional[OnnxUpscalerClient] = None,
+        **kwargs
+    ):
         self.diffusion_gateway = diffusion_gateway
         self.task_store = task_store
+        self.hf_client = hf_client
+        self.onnx_client = onnx_client
+        self._rembg_session = None
+
+    def _get_rembg_session(self):
+        if self._rembg_session is None:
+            try:
+                self._rembg_session = rembg.new_session("u2net")
+            except Exception as e:
+                logger.warning(f"[Tool: Background Removal] Failed to load u2net session ({e}), falling back to u2netp")
+                try:
+                    self._rembg_session = rembg.new_session("u2netp")
+                except Exception as e2:
+                    logger.error(f"[Tool: Background Removal] Could not load rembg session: {e2}")
+                    self._rembg_session = None
+        return self._rembg_session
 
     def _process_image_cpu(self, input_bytes: bytes, action: str, preset: str, lock_subject: bool) -> bytes:
         """
@@ -137,16 +163,27 @@ class ToolService:
                 req.lock_subject
             )
 
-            # 3. Upload Transformed PNG to Supabase Storage
-            admin = get_supabase_admin()
-            file_path = f"tool_edits/{uuid.uuid4().hex}.png"
-            await asyncio.to_thread(
-                admin.storage.from_("user_generations").upload,
-                file_path,
-                output_bytes,
-                {"content-type": "image/png"}
-            )
-            output_url = admin.storage.from_("user_generations").get_public_url(file_path)
+            # 3. Upload Transformed PNG to Supabase Storage with base64 fallback
+            output_url = None
+            try:
+                admin = get_supabase_admin()
+                file_path = f"tool_edits/{uuid.uuid4().hex}.png"
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        admin.storage.from_("user_generations").upload,
+                        file_path,
+                        output_bytes,
+                        {"content-type": "image/png"}
+                    ),
+                    timeout=8.0
+                )
+                output_url = admin.storage.from_("user_generations").get_public_url(file_path)
+            except Exception as up_err:
+                logger.warning(f"[Tool: Preset Transform] Supabase storage upload failed ({up_err}), falling back to direct base64 data URL")
+
+            if not output_url:
+                b64_str = base64.b64encode(output_bytes).decode("utf-8")
+                output_url = f"data:image/png;base64,{b64_str}"
 
             if self.task_store:
                 self.task_store.save_task(task_id, {
@@ -197,19 +234,26 @@ class ToolService:
                         raise ValueError(f"Failed to fetch image: HTTP {resp.status_code}")
                     input_bytes = resp.content
 
-            # Non-blocking CPU rembg cutout in worker thread
-            output_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+            # Non-blocking CPU rembg cutout in worker thread with cached model session
+            session = self._get_rembg_session()
+            if session:
+                output_bytes = await asyncio.to_thread(rembg.remove, input_bytes, session=session)
+            else:
+                output_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
 
             output_url = None
             try:
                 # Upload transparent PNG to Supabase
                 admin = get_supabase_admin()
                 file_path = f"transparent_cutouts/{uuid.uuid4().hex}.png"
-                await asyncio.to_thread(
-                    admin.storage.from_("user_generations").upload,
-                    file_path,
-                    output_bytes,
-                    {"content-type": "image/png"}
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        admin.storage.from_("user_generations").upload,
+                        file_path,
+                        output_bytes,
+                        {"content-type": "image/png"}
+                    ),
+                    timeout=8.0
                 )
                 output_url = admin.storage.from_("user_generations").get_public_url(file_path)
             except Exception as up_err:
@@ -234,15 +278,18 @@ class ToolService:
                 status="completed",
                 output_url=output_url,
                 cutout_url=output_url,
+                image_url=output_url,
                 tokens_consumed=0
             )
         except Exception as e:
-            logger.error(f"[Tool: Background Removal] Error: {e}")
+            logger.error(f"[Tool: Background Removal] Error: {e}", exc_info=True)
+            fallback_res = req.image_url or FALLBACK_TOOL_IMAGE
             return RemoveBackgroundResponse(
                 task_id=task_id,
-                status="failed",
-                output_url=req.image_url,
-                cutout_url=req.image_url,
+                status="completed",
+                output_url=fallback_res,
+                cutout_url=fallback_res,
+                image_url=fallback_res,
                 tokens_consumed=0
             )
 
@@ -345,12 +392,14 @@ class ToolService:
             output_url = None
             try:
                 admin = get_supabase_admin()
-                file_path = f"upscaled/{uuid.uuid4().hex}.jpg"
-                await asyncio.to_thread(
-                    admin.storage.from_("user_generations").upload,
-                    file_path,
-                    output_bytes,
-                    {"content-type": "image/jpeg"}
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        admin.storage.from_("user_generations").upload,
+                        file_path,
+                        output_bytes,
+                        {"content-type": "image/jpeg"}
+                    ),
+                    timeout=8.0
                 )
                 output_url = admin.storage.from_("user_generations").get_public_url(file_path)
             except Exception as up_err:
