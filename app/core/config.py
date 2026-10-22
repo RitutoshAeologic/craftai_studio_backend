@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
     HF_TOKEN: str = ""
+    POLLINATIONS_API_KEY: str = ""
 
     AES_SECRET_KEY: str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     STRIPE_SECRET_KEY: str = ""

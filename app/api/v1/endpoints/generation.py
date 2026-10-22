@@ -31,6 +31,7 @@ async def dispatch_generation(
     return res
 
 @router.get("/status/{task_id}", response_model=GenerationStatusResponse)
+@router.get("/generation/status/{task_id}", response_model=GenerationStatusResponse)
 async def get_generation_status(
     task_id: str,
     service: GenerationService = Depends(get_generation_service)
@@ -39,6 +40,7 @@ async def get_generation_status(
     return service.get_status(task_id)
 
 @router.websocket("/ws/generation/{task_id}")
+@router.websocket("/generation/ws/generation/{task_id}")
 async def generation_progress_ws(
     websocket: WebSocket,
     task_id: str,
