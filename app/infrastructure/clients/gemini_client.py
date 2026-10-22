@@ -47,12 +47,12 @@ class GeminiVisionClient(IVisionClient):
             except Exception as e:
                 logger.error(f"Gemini Vision Error in scan_photo: {e}")
 
-        # Enterprise fallback
+        # Safe empty fallback when API key is unconfigured or vision call fails
         return {
-            "extracted_prompt": "Artistic study inspired by reference, fine art portrait, dramatic chiaroscuro lighting, natural textures, 35mm film grain",
-            "detected_style": "Editorial Portraiture",
-            "lighting_optics": "Key light 45deg, 85mm f/1.4, shallow depth of field",
-            "model_used": f"google/{self.model_name} (Fallback Engine)"
+            "extracted_prompt": "",
+            "detected_style": "",
+            "lighting_optics": "",
+            "model_used": "fallback"
         }
 
     async def extract_facial_identity(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> str:

@@ -5,6 +5,8 @@ class GenerationDispatchRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=4000, description="Compiled generation prompt")
     character_id: Optional[str] = Field(None, description="Consistent character entity ID")
     face_reference_urls: Optional[List[str]] = Field(None, description="Face lock reference photo URLs")
+    reference_image_url: Optional[str] = Field(None, description="Reference image URL for Remix / Img2Img")
+    style_weight: Optional[float] = Field(0.55, ge=0.0, le=1.0, description="Remix anchor weight / similarity ratio (0.0 to 1.0)")
     negative_prompt: Optional[str] = Field(None, description="Explicit negative tokens to eliminate unwanted artifacts")
     structured_metadata: Optional[Dict[str, Any]] = Field(None, description="Visual Director structured metadata")
     width: Optional[int] = Field(1024, ge=512, le=2048)

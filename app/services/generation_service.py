@@ -42,7 +42,45 @@ class GenerationService:
     async def dispatch(self, req: GenerationDispatchRequest, user_id: Optional[str] = None) -> GenerationDispatchResponse:
         task_id = f"gen_{os.urandom(4).hex()}"
         has_face_lock = bool(req.face_reference_urls and len(req.face_reference_urls) > 0) or bool(req.character_id)
+        is_remix = bool(req.reference_image_url and req.reference_image_url.strip())
+        remix_ref_url = req.reference_image_url.strip() if is_remix else None
+        style_weight = float(req.style_weight if req.style_weight is not None else 0.55)
         effective_prompt = req.prompt.strip()
+
+        # ── 0. Remix Reference Image Conditioning ────────────────────────────
+        if is_remix and remix_ref_url:
+            if remix_ref_url.startswith("data:"):
+                try:
+                    import base64 as b64module
+                    header, base64_data = remix_ref_url.split(",", 1) if "," in remix_ref_url else ("", remix_ref_url)
+                    img_bytes = b64module.b64decode(base64_data)
+                    uploaded = await self._upload_to_supabase_storage(img_bytes, file_prefix="remix_ref")
+                    if uploaded:
+                        remix_ref_url = uploaded
+                except Exception as e:
+                    logger.warning(f"[Remix] Error uploading base64 reference: {e}")
+
+            try:
+                logger.info(f"[Remix] Scanning reference image for visual anchors: {remix_ref_url}")
+                scan_res = await self.gemini_vision.scan_photo(remix_ref_url)
+                extracted_prompt = scan_res.get("extracted_prompt", "")
+                detected_style = scan_res.get("detected_style", "")
+                lighting = scan_res.get("lighting_optics", "")
+
+                clean_instruction = re.sub(r'^(remix(\s+of)?(\s+[^,:\r\n]+)?[,:\r\n]\s*)', '', effective_prompt, flags=re.IGNORECASE).strip()
+                if not clean_instruction:
+                    clean_instruction = effective_prompt
+
+                if extracted_prompt:
+                    anchor_pct = int(style_weight * 100)
+                    effective_prompt = (
+                        f"In the visual aesthetic, character likeness, and composition of ({extracted_prompt}): "
+                        f"{clean_instruction}, style anchor preservation {anchor_pct}%, "
+                        f"{detected_style}, {lighting}, 8k render, masterpiece"
+                    )
+                    logger.info(f"[Remix] Synthesized conditioned prompt: {effective_prompt[:160]}...")
+            except Exception as e:
+                logger.warning(f"[Remix] Vision scan fallback: {e}")
 
         # ── 1. Multimodal Facial Identity Conditioning ────────────────────────
         extracted_face_tokens = None
@@ -71,7 +109,10 @@ class GenerationService:
 
         # ── 2. Route Generation Engine (Hugging Face InstantID vs FLUX.1) ─────
         direct_url = None
-        tier_label = "Tier 0 (FLUX.1-schnell via Hugging Face)"
+        if is_remix:
+            tier_label = f"Tier 0 (FLUX.1 Remix Image-to-Image · {int(style_weight * 100)}% Anchor)"
+        else:
+            tier_label = "Tier 0 (FLUX.1-schnell via Hugging Face)"
 
         if has_face_lock and ref_url:
             tier_label = "Tier 1 (InstantID Face-Lock via Hugging Face)"
@@ -112,7 +153,8 @@ class GenerationService:
                 width=req.width or 1024,
                 height=req.height or 1024,
                 seed=req.seed or 42,
-                model="flux"
+                model="flux",
+                reference_image=remix_ref_url
             )
 
         # ── 3. Record Task in State Store ─────────────────────────────────────
@@ -123,6 +165,9 @@ class GenerationService:
             "output_url": direct_url,
             "prompt": effective_prompt,
             "has_face_lock": has_face_lock,
+            "is_remix": is_remix,
+            "style_weight": style_weight,
+            "reference_image_url": remix_ref_url,
             "extracted_features": extracted_face_tokens
         })
 
@@ -133,7 +178,7 @@ class GenerationService:
                 admin.table("jobs").insert({
                     "job_id": task_id,
                     "user_id": user_id,
-                    "type": "IMAGE_GEN",
+                    "type": "REMIX" if is_remix else "IMAGE_GEN",
                     "status": "completed",
                     "prompt": effective_prompt,
                     "preview_url": direct_url,
@@ -173,12 +218,22 @@ class GenerationService:
         task = self.task_store.get_task(task_id) or {}
         has_face_lock = task.get("has_face_lock", False)
 
+        is_remix = task.get("is_remix", False)
+        style_weight = task.get("style_weight", 0.55)
+
         if has_face_lock:
             return [
                 {"progress": 20, "status": "scanning_face", "message": "Gemini 2.5 Flash scanning facial contours..."},
                 {"progress": 50, "status": "locking_identity", "message": "InstantID locking 512-D identity vectors..."},
                 {"progress": 80, "status": "rendering", "message": "Synthesizing styled portrait with preserved identity..."},
                 {"progress": 100, "status": "completed", "message": "Identity-locked master rendered!"}
+            ]
+        elif is_remix:
+            return [
+                {"progress": 20, "status": "analyzing_reference", "message": "Analyzing visual anchor & reference composition..."},
+                {"progress": 50, "status": "compiling_remix", "message": f"Blending style modifications at {int(style_weight * 100)}% anchor weight..."},
+                {"progress": 80, "status": "diffusing", "message": "Synthesizing remixed latents with FLUX.1 engine..."},
+                {"progress": 100, "status": "completed", "message": "Remix variation complete!"}
             ]
         else:
             return [

@@ -24,6 +24,6 @@ class IVisionClient(ABC):
 
 class IDiffusionGateway(ABC):
     @abstractmethod
-    def build_safe_url(self, prompt: str, width: int = 1024, height: int = 1024, seed: int = 42, model: str = "flux") -> str:
+    def build_safe_url(self, prompt: str, width: int = 1024, height: int = 1024, seed: int = 42, model: str = "flux", reference_image: Optional[str] = None) -> str:
         """Builds a compliant, privacy-enforced generation URL."""
         pass
