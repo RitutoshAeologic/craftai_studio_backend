@@ -91,6 +91,19 @@ def health_check():
         "database": "Supabase PostgreSQL"
     }
 
+from pathlib import Path
+from fastapi.responses import FileResponse
+from fastapi import HTTPException
+
+@app.get("/api/v1/media/{filename}", tags=["Media"])
+async def get_local_media(filename: str):
+    """Serves locally rendered images for dev mode and offline storage fallback."""
+    clean_name = Path(filename).name
+    file_path = Path(__file__).resolve().parent.parent / "storage" / "generations" / clean_name
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Media file '{clean_name}' not found.")
+    return FileResponse(file_path, media_type="image/png")
+
 @app.get("/api/v1/meta", tags=["Metadata"])
 def api_metadata():
     return {

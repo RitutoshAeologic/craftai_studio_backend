@@ -70,7 +70,7 @@ class GroqClient(ILLMClient):
             "You are an AI prompt copilot. The user wants to adjust their active image prompt. "
             "Merge their instruction into the base prompt while preserving locked subjects. "
             "CRITICAL RULE: If the base_prompt starts with or contains 'Edit image1 as follows: ', "
-            "you MUST preserve 'Edit image1 as follows: ' at the exact start of 'compiled_prompt\. "
+            "you MUST preserve 'Edit image1 as follows: ' at the exact start of 'compiled_prompt'. "
             "Output valid JSON ONLY with keys: 'compiled_prompt' (full merged prompt), "
             "'diff' (object with 'added' string array and 'removed' string array), "
             "'suggested_chips' (array of 3 next suggested modification labels)."

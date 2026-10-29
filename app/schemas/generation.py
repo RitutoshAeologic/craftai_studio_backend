@@ -2,6 +2,7 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
 class GenerationDispatchRequest(BaseModel):
+    task_id: Optional[str] = Field(None, description="Client-generated task ID to synchronize WebSocket progress")
     prompt: str = Field(..., min_length=1, max_length=4000, description="Compiled generation prompt")
     character_id: Optional[str] = Field(None, description="Consistent character entity ID")
     face_reference_urls: Optional[List[str]] = Field(None, description="Face lock reference photo URLs")

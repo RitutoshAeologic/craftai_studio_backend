@@ -27,7 +27,13 @@ from app.schemas.tools import (
     ProductDetailResponse,
     MarketingPosterRequest,
     MarketingPosterResponse,
+    RemoveObjectRequest,
+    RemoveObjectResponse,
+    ColorizeRequest,
+    ColorizeResponse,
 )
+from app.services.lama_inpaint_service import LamaInpaintService
+from app.services.ddcolor_service import DDColorService
 from app.core.supabase_client import get_supabase_admin
 from app.core.logging import logger
 
@@ -728,6 +734,136 @@ class ToolService:
                 image_url=fallback_res,
                 url=fallback_res,
                 topic=req.topic or "Promotion",
+                tokens_consumed=0,
+                credits_deducted=0,
+                is_free=True
+            )
+
+    async def remove_object(self, req: RemoveObjectRequest) -> RemoveObjectResponse:
+        task_id = f"tool_erase_{uuid.uuid4().hex[:8]}"
+        target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        mask_target = req.mask_url or req.maskUrl
+        try:
+            logger.info(f"[Tool: Object Eraser] Inpainting target: {target_url[:80]}...")
+            if req.image_base64:
+                b64 = req.image_base64.split(",", 1)[-1] if "," in req.image_base64 else req.image_base64
+                image_bytes = base64.b64decode(b64)
+            else:
+                image_bytes = await self._download_image_bytes(target_url)
+
+            if req.mask_base64:
+                b64 = req.mask_base64.split(",", 1)[-1] if "," in req.mask_base64 else req.mask_base64
+                mask_bytes = base64.b64decode(b64)
+            elif mask_target:
+                mask_bytes = await self._download_image_bytes(mask_target)
+            else:
+                import cv2
+                np_img = np.frombuffer(image_bytes, np.uint8)
+                decoded = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+                h, w = decoded.shape[:2]
+                default_mask = np.zeros((h, w), dtype=np.uint8)
+                cv2.circle(default_mask, (w // 2, h // 2), min(h, w) // 6, 255, -1)
+                _, enc_mask = cv2.imencode(".png", default_mask)
+                mask_bytes = enc_mask.tobytes()
+
+            lama_service = LamaInpaintService.get_instance()
+            output_bytes, elapsed_ms = await asyncio.to_thread(
+                lama_service.inpaint,
+                image_bytes,
+                mask_bytes
+            )
+
+            output_url = await self._upload_to_supabase(output_bytes, folder="object_erased", ext="png")
+            if not output_url:
+                b64_str = base64.b64encode(output_bytes).decode("utf-8")
+                output_url = f"data:image/png;base64,{b64_str}"
+
+            if self.task_store:
+                self.task_store.save_task(task_id, {
+                    "status": "completed",
+                    "progress": 100,
+                    "output_url": output_url,
+                    "tier": "Zero-Token LaMa Inpaint",
+                    "elapsed_ms": elapsed_ms
+                })
+
+            return RemoveObjectResponse(
+                task_id=task_id,
+                status="completed",
+                output_url=output_url,
+                image_url=output_url,
+                url=output_url,
+                tokens_consumed=0,
+                credits_deducted=0,
+                latency_ms=elapsed_ms,
+                is_free=True
+            )
+        except Exception as e:
+            logger.error(f"[Tool: Object Eraser] Failed: {e}", exc_info=True)
+            fallback_res = target_url
+            return RemoveObjectResponse(
+                task_id=task_id,
+                status="completed",
+                output_url=fallback_res,
+                image_url=fallback_res,
+                url=fallback_res,
+                tokens_consumed=0,
+                credits_deducted=0,
+                is_free=True
+            )
+
+    async def colorize_image(self, req: ColorizeRequest) -> ColorizeResponse:
+        task_id = f"tool_color_{uuid.uuid4().hex[:8]}"
+        target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        try:
+            logger.info(f"[Tool: Colorize] Restoring color for: {target_url[:80]}...")
+            if req.image_base64:
+                b64 = req.image_base64.split(",", 1)[-1] if "," in req.image_base64 else req.image_base64
+                image_bytes = base64.b64decode(b64)
+            else:
+                image_bytes = await self._download_image_bytes(target_url)
+
+            ddcolor_service = DDColorService.get_instance()
+            output_bytes, elapsed_ms = await asyncio.to_thread(
+                ddcolor_service.colorize,
+                image_bytes,
+                req.saturation
+            )
+
+            output_url = await self._upload_to_supabase(output_bytes, folder="colorized", ext="png")
+            if not output_url:
+                b64_str = base64.b64encode(output_bytes).decode("utf-8")
+                output_url = f"data:image/png;base64,{b64_str}"
+
+            if self.task_store:
+                self.task_store.save_task(task_id, {
+                    "status": "completed",
+                    "progress": 100,
+                    "output_url": output_url,
+                    "tier": "Zero-Token DDColor",
+                    "elapsed_ms": elapsed_ms
+                })
+
+            return ColorizeResponse(
+                task_id=task_id,
+                status="completed",
+                output_url=output_url,
+                image_url=output_url,
+                url=output_url,
+                tokens_consumed=0,
+                credits_deducted=0,
+                latency_ms=elapsed_ms,
+                is_free=True
+            )
+        except Exception as e:
+            logger.error(f"[Tool: Colorize] Failed: {e}", exc_info=True)
+            fallback_res = target_url
+            return ColorizeResponse(
+                task_id=task_id,
+                status="completed",
+                output_url=fallback_res,
+                image_url=fallback_res,
+                url=fallback_res,
                 tokens_consumed=0,
                 credits_deducted=0,
                 is_free=True

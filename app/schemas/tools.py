@@ -243,3 +243,63 @@ class MarketingPosterResponse(BaseModel):
     tokens_consumed: int = 0
     credits_deducted: int = 0
     is_free: bool = True
+
+
+class RemoveObjectRequest(BaseModel):
+    image_url: Optional[str] = Field(default=None, description="Image URL or Base64 data URL")
+    imageUrl: Optional[str] = None
+    mask_url: Optional[str] = Field(default=None, description="Mask URL or Base64 data URL (white=erase, black=keep)")
+    maskUrl: Optional[str] = None
+    image_base64: Optional[str] = None
+    mask_base64: Optional[str] = None
+    user_id: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            url = data.get("image_url") or data.get("imageUrl") or data.get("url")
+            if url:
+                data["image_url"] = url
+            mask = data.get("mask_url") or data.get("maskUrl") or data.get("mask")
+            if mask:
+                data["mask_url"] = mask
+        return data
+
+class RemoveObjectResponse(BaseModel):
+    task_id: str
+    status: str = "completed"
+    output_url: str
+    image_url: str = Field(default="", description="Alias to output_url")
+    url: str = Field(default="", description="Alias to output_url")
+    tokens_consumed: int = 0
+    credits_deducted: int = 0
+    latency_ms: Optional[float] = None
+    is_free: bool = True
+
+class ColorizeRequest(BaseModel):
+    image_url: Optional[str] = Field(default=None, description="Image URL or Base64 data URL to colorize")
+    imageUrl: Optional[str] = None
+    image_base64: Optional[str] = None
+    saturation: float = Field(default=1.0, description="Color saturation multiplier: 0.5 to 2.0")
+    user_id: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            url = data.get("image_url") or data.get("imageUrl") or data.get("url")
+            if url:
+                data["image_url"] = url
+        return data
+
+class ColorizeResponse(BaseModel):
+    task_id: str
+    status: str = "completed"
+    output_url: str
+    image_url: str = Field(default="", description="Alias to output_url")
+    url: str = Field(default="", description="Alias to output_url")
+    tokens_consumed: int = 0
+    credits_deducted: int = 0
+    latency_ms: Optional[float] = None
+    is_free: bool = True

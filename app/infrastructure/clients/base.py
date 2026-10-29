@@ -27,3 +27,16 @@ class IDiffusionGateway(ABC):
     def build_safe_url(self, prompt: str, width: int = 1024, height: int = 1024, seed: int = 42, model: str = "flux") -> str:
         """Builds a compliant, privacy-enforced generation URL."""
         pass
+
+class IDiffusionEngine(ABC):
+    @abstractmethod
+    async def generate_image(
+        self,
+        prompt: str,
+        width: int = 1024,
+        height: int = 1024,
+        seed: int = 42,
+        negative_prompt: Optional[str] = None
+    ) -> Optional[bytes]:
+        """Generates raw image bytes given diffusion prompt parameters."""
+        pass

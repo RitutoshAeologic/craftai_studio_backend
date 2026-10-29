@@ -35,7 +35,7 @@ class GeminiLLMClient(ILLMClient):
                 return resp.text
             raise e
 
-    async def _safe_generate(self, prompt_input: str, timeout: float = 4.5) -> str:
+    async def _safe_generate(self, prompt_input: str, timeout: float = 12.0) -> str:
         """Executes in threadpool without blocking FastAPI event loop, with strict timeout."""
         try:
             return await asyncio.wait_for(

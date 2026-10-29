@@ -17,6 +17,10 @@ from app.schemas.tools import (
     ProductDetailResponse,
     MarketingPosterRequest,
     MarketingPosterResponse,
+    RemoveObjectRequest,
+    RemoveObjectResponse,
+    ColorizeRequest,
+    ColorizeResponse,
 )
 from app.core.supabase_client import get_supabase_admin
 from app.core.logging import logger
@@ -81,6 +85,29 @@ async def tool_marketing_poster(
 ):
     """Commercial marketing promotional poster layout engine."""
     return await service.generate_marketing_poster(req)
+
+
+@router.post("/tools/remove-object", response_model=RemoveObjectResponse)
+async def tool_remove_object(
+    req: RemoveObjectRequest,
+    service: ToolService = Depends(get_tool_service)
+):
+    """
+    Magic Object Eraser (LaMa Neural Inpainting).
+    Erase unwanted people, wires, text, or objects seamlessly in sub-second.
+    """
+    return await service.remove_object(req)
+
+@router.post("/tools/colorize", response_model=ColorizeResponse)
+async def tool_colorize(
+    req: ColorizeRequest,
+    service: ToolService = Depends(get_tool_service)
+):
+    """
+    DDColor High-Fidelity Colorizer.
+    Restores natural vibrant color to vintage or B&W photos, preserving 100% native resolution.
+    """
+    return await service.colorize_image(req)
 
 @router.get("/tools/history")
 async def tool_history(
