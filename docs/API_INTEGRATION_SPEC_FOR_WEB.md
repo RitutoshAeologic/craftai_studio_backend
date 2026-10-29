@@ -593,6 +593,121 @@ Returned for unforeseen backend exceptions; logs traceback server-side and shiel
 
 > **Web Implementation Tip (Axios / Fetch):**  
 > Always read `err.response?.data?.message || err.response?.data?.detail?.[0]?.msg || err.message` to display user-friendly toast alerts.
+---
+
+### 2.12 Explore Collections & Bookmarks API
+Provides Instagram-style bookmarking, customizable folders, and 1-tap quick saving.
+
+#### A. List Collections:
+- **Endpoint:** `GET /api/v1/collections` *(or `/api/v1/prompt-engineering/collections`)*
+- **Headers:** `Authorization: Bearer <token>`
+- **Response (HTTP 200):**
+```json
+{
+  "total": 2,
+  "collections": [
+    {
+      "id": "col_default_all_saved",
+      "name": "All Saved",
+      "description": "Default collection for quick bookmarks",
+      "cover_image_url": "https://...",
+      "item_count": 14,
+      "is_default": true,
+      "is_private": true,
+      "created_at": "2026-10-28T12:00:00Z",
+      "updated_at": "2026-10-28T12:00:00Z"
+    }
+  ]
+}
+```
+
+#### B. 1-Tap Quick Save / Bookmark Toggle:
+- **Endpoint:** `POST /api/v1/collections/quick-save` *(or `/api/v1/prompt-engineering/collections/quick-save`)*
+- **Description:** Idempotent toggle. If item is not in the default "All Saved" collection, adds it; if already present, removes it (un-bookmarks).
+- **Request:**
+```json
+{
+  "job_id": "gen_123 (optional if saving user job)",
+  "explore_prompt_id": "exp_456 (optional if saving explore card)",
+  "image_url": "https://.../preview.png"
+}
+```
+- **Response (HTTP 200):**
+```json
+{
+  "status": "success",
+  "action": "saved", // or "unsaved"
+  "is_saved": true,
+  "target_id": "exp_456",
+  "collection_id": "col_default_all_saved"
+}
+```
+
+#### C. Check Bookmark Status:
+- **Endpoint:** `GET /api/v1/collections/status/{target_id}` *(or `/api/v1/prompt-engineering/collections/status/{target_id}`)*
+- **Description:** Checks if a specific artwork is saved in any collection for the current user.
+- **Response (HTTP 200):**
+```json
+{
+  "target_id": "exp_456",
+  "is_saved": true,
+  "collection_ids": ["col_default_all_saved"]
+}
+```
+
+#### D. Create Custom Named Collection:
+- **Endpoint:** `POST /api/v1/collections`
+- **Request:** `{"name": "Cyberpunk Inspirations", "description": "Neon aesthetic references", "is_private": true}`
+
+---
+
+### 2.13 Universal Search & Recommendation Engine
+
+#### A. Multi-Faceted Universal Search:
+- **Endpoint:** `POST /api/v1/search` *(or `/api/v1/prompt-engineering/search`)*
+- **Description:** Full-text and structured faceted query engine across prompts, style tags, creators, and metadata.
+- **Request:**
+```json
+{
+  "query": "cyberpunk neon rain",
+  "search_type": "text",
+  "categories": ["Cyberpunk", "Sci-Fi"],
+  "aspect_ratios": ["1:1", "16:9"],
+  "sort_by": "newest",
+  "page": 1,
+  "page_size": 20
+}
+```
+- **Response (HTTP 200):**
+```json
+{
+  "total": 42,
+  "page": 1,
+  "page_size": 20,
+  "results": [
+    {
+      "id": "exp_101",
+      "title": "Cyber Ronin in Rain",
+      "preview_url": "https://.../ronin.png",
+      "author_name": "Aman Sharma",
+      "author_handle": "@amansharma",
+      "category": "Cyberpunk",
+      "model_used": "flux",
+      "tool_applied": "text_to_image",
+      "aspect_ratio": "16:9",
+      "dimensions": "1024x1024",
+      "likes_count": 84,
+      "remix_count": 12,
+      "created_at": "2026-10-28T14:30:00Z"
+    }
+  ]
+}
+```
+
+#### B. Similar Creations Recommendations ("More Like This"):
+- **Endpoint:** `GET /api/v1/explore/similar/{card_id}?limit=6` *(or `/api/v1/prompt-engineering/explore/similar/{card_id}`)*
+- **Description:** Contextual recommendation engine matching visual aesthetics, category clusters, and tag similarity.
+- **Response (HTTP 200):** Array of `explore_prompts` cards matching the aesthetic DNA of `card_id`.
 
 ---
 
@@ -633,6 +748,15 @@ The Web app can read and write directly to Supabase via `@supabase/ssr` / `@supa
 | `creator_royalty_cut` | `NUMERIC(4,1)` | Author royalty share (e.g., `1.6` = 40%) |
 | `remix_count` | `INTEGER` | Community remixes counter |
 | `like_count` | `INTEGER` | Likes counter |
+
+---
+
+
+### 3.4 `collections` & `collection_items` Tables (Bookmarks & Folders)
+| Table | Key Columns | Description |
+| :--- | :--- | :--- |
+| `collections` | `id` (UUID), `user_id` (UUID), `name` (TEXT), `is_default` (BOOL), `is_private` (BOOL) | User bookmark folder metadata |
+| `collection_items` | `id` (UUID), `collection_id` (UUID), `user_id` (UUID), `job_id` (UUID), `explore_prompt_id` (UUID), `image_url` (TEXT) | Polymorphic items bookmarked in folders |
 
 ---
 
