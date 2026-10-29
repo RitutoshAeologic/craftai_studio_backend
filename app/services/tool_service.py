@@ -12,6 +12,14 @@ from app.infrastructure.clients.base import IDiffusionGateway
 from app.infrastructure.clients.huggingface_client import HuggingFaceClient
 from app.infrastructure.clients.onnx_upscaler_client import OnnxUpscalerClient
 from app.infrastructure.storage.task_store import ITaskStore
+from app.infrastructure.tools import (
+    IInpaintEngine,
+    IColorizeEngine,
+    IBackgroundRemoverEngine,
+    IUpscalerEngine,
+    ToolEngineFactory
+)
+
 from app.schemas.tools import (
     ToolPresetRequest,
     ToolPresetResponse,
@@ -46,12 +54,20 @@ class ToolService:
         task_store: Optional[ITaskStore] = None,
         hf_client: Optional[HuggingFaceClient] = None,
         onnx_client: Optional[OnnxUpscalerClient] = None,
+        inpaint_engine: Optional[IInpaintEngine] = None,
+        colorize_engine: Optional[IColorizeEngine] = None,
+        bg_remover_engine: Optional[IBackgroundRemoverEngine] = None,
+        upscaler_engine: Optional[IUpscalerEngine] = None,
         **kwargs
     ):
         self.diffusion_gateway = diffusion_gateway
         self.task_store = task_store
         self.hf_client = hf_client
         self.onnx_client = onnx_client
+        self.inpaint_engine = inpaint_engine or ToolEngineFactory.get_inpaint_engine()
+        self.colorize_engine = colorize_engine or ToolEngineFactory.get_colorize_engine()
+        self.bg_remover_engine = bg_remover_engine or ToolEngineFactory.get_bg_remover_engine()
+        self.upscaler_engine = upscaler_engine or ToolEngineFactory.get_upscaler_engine()
         self._rembg_session = None
 
     def _get_rembg_session(self):
@@ -66,6 +82,19 @@ class ToolService:
                     logger.error(f"[Tool: Background Removal] Could not load rembg session: {e2}")
                     self._rembg_session = None
         return self._rembg_session
+
+    async def _resolve_job_image_url(self, image_id: Optional[str]) -> Optional[str]:
+        if not image_id:
+            return None
+        try:
+            admin = get_supabase_admin()
+            res = admin.table("jobs").select("preview_url, preview_image_url").or_(f"id.eq.{image_id},job_id.eq.{image_id}").execute()
+            if res.data and len(res.data) > 0:
+                row = res.data[0]
+                return row.get("preview_url") or row.get("preview_image_url")
+        except Exception as e:
+            logger.warning(f"[Tool: Storage] Could not resolve job image URL for '{image_id}': {e}")
+        return None
 
     async def _download_image_bytes(self, url: Optional[str]) -> bytes:
         if not url:
@@ -217,11 +246,7 @@ class ToolService:
             logger.info(f"[Tool: Background Removal] Processing: {target_url[:80]}...")
             input_bytes = await self._download_image_bytes(target_url)
 
-            session = self._get_rembg_session()
-            if session:
-                output_bytes = await asyncio.to_thread(rembg.remove, input_bytes, session=session)
-            else:
-                output_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+            output_bytes = await self.bg_remover_engine.remove_background(input_bytes)
 
             output_url = await self._upload_to_supabase(output_bytes, folder="transparent_cutouts", ext="png")
             if not output_url:
@@ -313,9 +338,11 @@ class ToolService:
             if not effective_url:
                 effective_url = FALLBACK_TOOL_IMAGE
 
+            resolved = await self._resolve_job_image_url(req.image_id)
+            if resolved:
+                effective_url = resolved
             input_bytes = await self._download_image_bytes(effective_url)
-            output_bytes, orig_res, upscaled_res = await asyncio.to_thread(
-                self._upscale_image_cpu,
+            output_bytes, orig_res, upscaled_res = await self.upscaler_engine.upscale(
                 input_bytes,
                 effective_scale,
                 effective_mode
@@ -766,9 +793,7 @@ class ToolService:
                 _, enc_mask = cv2.imencode(".png", default_mask)
                 mask_bytes = enc_mask.tobytes()
 
-            lama_service = LamaInpaintService.get_instance()
-            output_bytes, elapsed_ms = await asyncio.to_thread(
-                lama_service.inpaint,
+            output_bytes, elapsed_ms = await self.inpaint_engine.inpaint(
                 image_bytes,
                 mask_bytes
             )
@@ -823,9 +848,7 @@ class ToolService:
             else:
                 image_bytes = await self._download_image_bytes(target_url)
 
-            ddcolor_service = DDColorService.get_instance()
-            output_bytes, elapsed_ms = await asyncio.to_thread(
-                ddcolor_service.colorize,
+            output_bytes, elapsed_ms = await self.colorize_engine.colorize(
                 image_bytes,
                 req.saturation
             )
