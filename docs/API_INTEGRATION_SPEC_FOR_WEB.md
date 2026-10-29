@@ -799,6 +799,198 @@ Triggered by tapping `✏️ Edit image`:
 ---
 
 ### 5.6 Screen 5: Creative Skills Toolbox (`/tools`)
-- **Background Remover:** Upload image or select from library → 1-tap transparent PNG cutout preview with before/after slider.
-- **Portrait Relighting & Depth Bokeh:** Adjust studio lighting presets (Golden hour, Studio neon, Rim light).
-- **4K Lossless Upscaler:** Detail synthesis and super-resolution upscaler.
+The Creative Skills Toolbox hosts zero-token, sub-second generative utility micro-services:
+
+1. **AI Background Remover (`/tools/remove-background`):**
+   - Upload image or select from library.
+   - 1-tap transparent PNG cutout preview with interactive Before/After wipe slider.
+2. **Zero-Token Optical Super-Resolution Upscaler (`/tools/upscale`):**
+   - 2X HD and 4X Ultra detail synthesis without AI hallucinations.
+3. **AI Background Inpainting (`/tools/ai-background`):**
+   - Studio backdrop replacement (pure white, marble, minimalist studio).
+4. **AI Canvas Expansion (`/tools/ai-expand`):**
+   - Outpainting to target ratios (`16:9`, `9:16`, `4:5`).
+5. **Portrait Relighting & Depth Bokeh (`/tools/edit-preset`):**
+   - Studio lighting presets (Golden Hour, Cyberpunk Neon, Studio Softbox).
+6. **Magic Object Eraser (`/tools/remove-object`):**
+   - Sub-second neural inpainting (LaMa FFC engine).
+   - Erases unwanted people, wires, text, or objects seamlessly.
+7. **Vintage Photo Colorizer (`/tools/colorize`):**
+   - Dual-Decoder (DDColor) neural color restoration.
+   - Converts B&W or historical photos to full vibrant color while preserving 100% native sharpness.
+
+---
+
+### 5.7 Detailed UI/UX Specification for New Creative Tools
+
+#### 5.7.1 Magic Object Eraser UI Component (`MagicObjectEraser`)
+```
++-----------------------------------------------------------+
+| [< Back]              Magic Object Eraser        [Save ⬇] |
++-----------------------------------------------------------+
+|                                                           |
+|             +-------------------------------+             |
+|             |                               |             |
+|             |          [ Image ]            |             |
+|             |       ~ ~ ~ ~ ~ ~ ~ ~         |             |
+|             |      ( Neon Mask Path )       |             |
+|             |       ~ ~ ~ ~ ~ ~ ~ ~         |             |
+|             |                               |             |
+|             +-------------------------------+             |
+|                                                           |
++-----------------------------------------------------------+
+|  Brush Size:  ( - ) =====[ O ]====== ( + )  [ 35px ]      |
++-----------------------------------------------------------+
+|  [ ↶ Undo ]   [ ↷ Redo ]   [ ✕ Clear Mask ]               |
++-----------------------------------------------------------+
+|              [ ⚡ ERASE OBJECT (Sub-Second) ]              |
++-----------------------------------------------------------+
+```
+
+##### Step-by-Step Frontend Workflow:
+1. **Interactive Gesture Canvas:**
+   - Render the target image inside an HTML5 `<canvas>` (Next.js) or `CustomPaint` / `GestureDetector` (Flutter).
+   - As the user drags across the image, draw smooth quadratic bezier curves in semi-transparent violet (`rgba(139, 92, 246, 0.5)`).
+   - Display a circular cursor indicator matching the exact brush diameter.
+2. **Toolbar Controls:**
+   - **Brush Slider:** Dynamic range from `10px` to `80px`.
+   - **Undo / Redo:** Maintain a stack of stroke paths.
+   - **Clear:** Empties the stroke stack.
+3. **Generating the Mask for Backend:**
+   - Create an offscreen canvas at the exact **`naturalWidth` x `naturalHeight`** of the original image.
+   - Fill background with solid black: `#000000`.
+   - Draw all user strokes with solid white: `#FFFFFF`.
+   - Export mask as PNG base64: `data:image/png;base64,...`.
+4. **API Dispatch:**
+   - Send `POST /api/v1/tools/remove-object` with `{ image_url: "...", mask_base64: "data:image/png;base64,..." }`.
+   - Shows loading shimmer overlay (~900ms).
+5. **Interactive Before / After Wipe Slider:**
+   - Upon completion, replace image with an interactive split comparison widget:
+     - Left side: Original Image.
+     - Right side: Inpainted Result.
+     - Draggable vertical divider handle.
+
+---
+
+#### 5.7.2 Vintage Photo Colorizer UI Component (`PhotoColorizer`)
+```
++-----------------------------------------------------------+
+| [< Back]            Vintage Photo Colorizer       [Save ⬇] |
++-----------------------------------------------------------+
+|                                                           |
+|             +-------------------------------+             |
+|             |           |                   |             |
+|             |  Original |   Vibrant Color   |             |
+|             |   (B & W) |    (Restored)     |             |
+|             |           |<||>               |             |
+|             |           |                   |             |
+|             +-------------------------------+             |
+|                   < Drag to Compare >                     |
+|                                                           |
++-----------------------------------------------------------+
+|  Saturation:  [ 0.8x Muted ]  [ 1.0x Natural ]  [ 1.2x Rich ★ ] |
++-----------------------------------------------------------+
+|             [ 🎨 RESTORE NATURAL COLORS ]                 |
++-----------------------------------------------------------+
+```
+
+##### Step-by-Step Frontend Workflow:
+1. **Initial State:** Display input B&W image.
+2. **Action Trigger:** User taps **`[ 🎨 Restore Natural Colors ]`**.
+3. **API Dispatch:**
+   - Call `POST /api/v1/tools/colorize` with `{ image_url: "...", saturation: 1.2 }`.
+   - Server processes in ~1,090ms.
+4. **Interactive Comparison Slider:**
+   - Renders a two-layer split view with an interactive center divider handle.
+   - Dragging the handle reveals the transformation from historical monochrome to full lifelike color.
+5. **Saturation Fine-Tuning:**
+   - User can tap presets (`0.8x`, `1.0x`, `1.2x`, `1.4x`) to instantly re-render or tweak intensity.
+6. **Export:** 1-tap download lossless PNG or save directly to user collections.
+
+---
+
+## 6. Frontend Developer Integration Code Snippets
+
+### 6.1 Next.js 15 (TypeScript) Example Helper
+
+```typescript
+// lib/api/tools.ts
+const BACKEND_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://192.168.29.30:8000/api/v1";
+
+interface ToolResponse {
+  task_id: string;
+  status: string;
+  output_url: string;
+  image_url: string;
+  latency_ms?: number;
+}
+
+// 1. Magic Object Eraser
+export async function eraseObject(
+  imageUrl: string,
+  maskBase64: string,
+  token?: string
+): Promise<ToolResponse> {
+  const res = await fetch(`${BACKEND_BASE}/tools/remove-object`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Bypass-Tunnel-Reminder": "true",
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify({
+      image_url: imageUrl,
+      mask_base64: maskBase64
+    })
+  });
+  if (!res.ok) throw new Error(`Object eraser failed: ${res.statusText}`);
+  return res.json();
+}
+
+// 2. Photo Colorizer
+export async function colorizePhoto(
+  imageUrl: string,
+  saturation: number = 1.2,
+  token?: string
+): Promise<ToolResponse> {
+  const res = await fetch(`${BACKEND_BASE}/tools/colorize`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Bypass-Tunnel-Reminder": "true",
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify({
+      image_url: imageUrl,
+      saturation: saturation
+    })
+  });
+  if (!res.ok) throw new Error(`Colorizer failed: ${res.statusText}`);
+  return res.json();
+}
+```
+
+---
+
+### 6.2 Frontend Environment Configuration Guide
+
+#### For Web (Next.js / Vite / React) in `.env.local`:
+```env
+# LAN Wi-Fi (Recommended for testing on same network):
+NEXT_PUBLIC_BACKEND_URL=http://192.168.29.30:8000/api/v1
+
+# Remote Public Tunnel (For remote developers):
+# NEXT_PUBLIC_BACKEND_URL=https://craftai-backend.loca.lt/api/v1
+```
+
+#### For Mobile (Flutter) in `.env`:
+```env
+# LAN Wi-Fi:
+BACKEND_URL=http://192.168.29.30:8000/api/v1
+API_BASE_URL=http://192.168.29.30:8000/api/v1
+
+# Remote Public Tunnel:
+# BACKEND_URL=https://craftai-backend.loca.lt/api/v1
+# API_BASE_URL=https://craftai-backend.loca.lt/api/v1
+```
+
