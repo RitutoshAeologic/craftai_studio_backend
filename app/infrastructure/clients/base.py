@@ -40,3 +40,29 @@ class IDiffusionEngine(ABC):
     ) -> Optional[bytes]:
         """Generates raw image bytes given diffusion prompt parameters."""
         pass
+
+class IFaceLockEngine(ABC):
+    """Abstract interface for InstantID / Facial Identity Preservation."""
+    @abstractmethod
+    async def generate_with_face(
+        self,
+        face_image_url_or_path: str,
+        prompt: str,
+        negative_prompt: Optional[str] = None,
+        seed: int = 42
+    ) -> Optional[bytes]:
+        """Synthesizes high-fidelity image with 100% facial identity preservation."""
+        pass
+
+class ICloudDiffusionEngine(ABC):
+    """Abstract interface for Serverless Cloud FLUX.1 / Cloud Diffusion."""
+    @abstractmethod
+    async def generate_flux(
+        self,
+        prompt: str,
+        width: int = 1024,
+        height: int = 1024,
+        seed: int = 42
+    ) -> Optional[bytes]:
+        """Synthesizes image via serverless cloud FLUX.1 engine."""
+        pass

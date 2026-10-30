@@ -8,10 +8,11 @@ from typing import Optional, Union, Tuple
 from PIL import Image
 from huggingface_hub import InferenceClient
 from gradio_client import Client as GradioClient, handle_file
+from app.infrastructure.clients.base import IFaceLockEngine, ICloudDiffusionEngine
 from app.core.config import settings
 from app.core.logging import logger
 
-class HuggingFaceClient:
+class HuggingFaceClient(IFaceLockEngine, ICloudDiffusionEngine):
     """
     Hugging Face Client supporting:
     1. Direct FLUX.1-schnell Text-to-Image via InferenceClient (Zero watermarks, high-fidelity 1024x1024).
@@ -58,6 +59,21 @@ class HuggingFaceClient:
         except Exception as e:
             logger.error(f"[HuggingFace FLUX.1] Generation failed: {e}")
             return None
+
+    async def generate_with_face(
+        self,
+        face_image_url_or_path: str,
+        prompt: str,
+        negative_prompt: Optional[str] = None,
+        seed: int = 42
+    ) -> Optional[bytes]:
+        """Interface method for IFaceLockEngine."""
+        return await self.generate_instantid(
+            face_image_url_or_path=face_image_url_or_path,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            seed=seed
+        )
 
     async def generate_instantid(
         self,

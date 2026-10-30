@@ -103,6 +103,8 @@ class UpscaleResponse(BaseModel):
 class AiBackgroundRequest(BaseModel):
     image_url: Optional[str] = None
     imageUrl: Optional[str] = None
+    image_base64: Optional[str] = None
+    imageBase64: Optional[str] = None
     mode: Optional[str] = "pure_white"
     custom_backdrop: Optional[str] = None
     customBackdrop: Optional[str] = None
@@ -119,6 +121,10 @@ class AiBackgroundRequest(BaseModel):
             url = data.get("image_url") or data.get("imageUrl") or data.get("url")
             if url:
                 data["image_url"] = url
+            b64 = data.get("image_base64") or data.get("imageBase64")
+            if b64:
+                data["image_base64"] = b64
+                data["imageBase64"] = b64
             backdrop = data.get("custom_backdrop") or data.get("customBackdrop")
             if backdrop:
                 data["custom_backdrop"] = backdrop

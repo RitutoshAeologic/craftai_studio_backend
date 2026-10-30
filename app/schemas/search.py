@@ -2,7 +2,7 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
 class UniversalSearchRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=500, description="Search keyword across prompts, tags, styles")
+    query: str = Field("", max_length=500, description="Search keyword across prompts, tags, styles")
     search_type: str = Field("text", description="'text' | 'image' | 'video' multimodal search flag")
     models: Optional[List[str]] = Field(None, description="Filter by AI models (sdxl_lightning, flux, etc.)")
     tools: Optional[List[str]] = Field(None, description="Filter by tools (text_to_image, upscale, cutouts)")

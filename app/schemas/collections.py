@@ -1,5 +1,5 @@
 from typing import Optional, List, Any, Dict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 class CollectionCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Collection name")
@@ -8,8 +8,35 @@ class CollectionCreateRequest(BaseModel):
 
 class CollectionItemAddRequest(BaseModel):
     job_id: Optional[str] = Field(None, description="Supabase jobs.id reference")
+    jobId: Optional[str] = None
     explore_prompt_id: Optional[str] = Field(None, description="Supabase explore_prompts.id reference")
+    explorePromptId: Optional[str] = None
+    item_id: Optional[str] = Field(None, description="Generic item identifier")
+    itemId: Optional[str] = None
+    artwork_id: Optional[str] = None
     image_url: str = Field(..., min_length=1, description="Direct URL of bookmarked artwork")
+    imageUrl: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            url = data.get("image_url") or data.get("imageUrl") or data.get("url")
+            if url:
+                data["image_url"] = str(url)
+            job = data.get("job_id") or data.get("jobId")
+            if job:
+                data["job_id"] = str(job)
+            exp = data.get("explore_prompt_id") or data.get("explorePromptId") or data.get("prompt_id") or data.get("promptId")
+            if exp:
+                data["explore_prompt_id"] = str(exp)
+            item = data.get("item_id") or data.get("itemId")
+            if item:
+                data["item_id"] = str(item)
+            art = data.get("artwork_id") or data.get("artworkId")
+            if art:
+                data["artwork_id"] = str(art)
+        return data
 
 class CollectionResponse(BaseModel):
     id: str

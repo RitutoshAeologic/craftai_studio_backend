@@ -1,7 +1,8 @@
 import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, Query, UploadFile, File as FastAPIFile, HTTPException, Body
-from app.api.deps import get_vision_service
+from app.api.deps import get_vision_service, get_storage_provider
+from app.infrastructure.storage.storage_provider import IStorageProvider
 from app.services.vision_service import VisionService
 from app.schemas.vision import VisionScanRequest, VisionScanResponse
 from app.core.supabase_client import get_supabase_admin
@@ -37,23 +38,39 @@ async def scan_reference_photo(
 @router.post("/upload-reference")
 async def upload_reference_photo(
     file: UploadFile = FastAPIFile(...),
+    storage: IStorageProvider = Depends(get_storage_provider)
 ):
     try:
-        admin = get_supabase_admin()
         ext = file.filename.split(".")[-1].lower() if file.filename and "." in file.filename else "png"
-        file_path = f"user_refs/{uuid.uuid4().hex}.{ext}"
+        content_type = file.content_type or ("image/png" if ext == "png" else "image/jpeg")
         content = await file.read()
 
-        admin.storage.from_("reference-images").upload(
-            file_path,
-            content,
-            {"content-type": file.content_type or "image/png"}
+        public_url = await storage.upload(
+            data=content,
+            folder="reference-images",
+            file_prefix="ref",
+            ext=ext,
+            content_type=content_type
         )
-        public_url = admin.storage.from_("reference-images").get_public_url(file_path)
-        return {"url": public_url, "file_path": file_path}
+        if not public_url:
+            import base64
+            b64 = base64.b64encode(content).decode("utf-8")
+            public_url = f"data:{content_type};base64,{b64}"
+
+        return {"url": public_url, "file_path": public_url}
     except Exception as e:
-        logger.error(f"[Storage] Reference upload failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Storage upload failed: {str(e)}")
+        logger.warning(f"[Storage] Reference upload notice: {e}. Falling back to Data URI.")
+        try:
+            import base64
+            file.file.seek(0)
+            content = await file.read()
+            ext = file.filename.split(".")[-1].lower() if file.filename and "." in file.filename else "png"
+            content_type = file.content_type or ("image/png" if ext == "png" else "image/jpeg")
+            b64 = base64.b64encode(content).decode("utf-8")
+            return {"url": f"data:{content_type};base64,{b64}", "file_path": ""}
+        except Exception as e2:
+            logger.error(f"[Storage] Reference fallback failed: {e2}")
+            raise HTTPException(status_code=500, detail=f"Storage upload failed: {str(e)}")
 
 @router.post("/cleanup-reference")
 async def cleanup_reference_photo(

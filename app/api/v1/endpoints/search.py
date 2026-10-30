@@ -1,3 +1,4 @@
+import re
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException, Query
 from app.core.supabase_client import get_supabase_admin
@@ -170,6 +171,7 @@ async def universal_search(req: UniversalSearchRequest):
     filtered = []
     for item in _COMMUNITY_CREATIONS:
         match_query = (
+            not query_str or
             query_str in item["title"].lower() or
             query_str in item["category"].lower() or
             query_str in item["author_name"].lower() or
@@ -177,13 +179,16 @@ async def universal_search(req: UniversalSearchRequest):
         )
         if not match_query:
             continue
-        if req.categories and item["category"] not in req.categories:
+        if req.categories and item["category"] not in req.categories and "All" not in req.categories:
             continue
-        if req.models and item["model_used"] not in req.models:
-            continue
+        if req.models and "All Models" not in req.models:
+            item_clean = re.sub(r"[^a-z0-9]", "", item["model_used"].lower())
+            req_clean = [re.sub(r"[^a-z0-9]", "", m.lower()) for m in req.models]
+            if not any(m in item_clean or item_clean in m for m in req_clean):
+                continue
         if req.tools and item["tool_applied"] not in req.tools:
             continue
-        if req.aspect_ratios and item["aspect_ratio"] not in req.aspect_ratios:
+        if req.aspect_ratios and "All" not in req.aspect_ratios and item["aspect_ratio"] not in req.aspect_ratios:
             continue
         filtered.append(SearchResultItem(**item))
 

@@ -181,16 +181,32 @@ async def add_item_to_collection(
     now_iso = datetime.now(timezone.utc).isoformat()
     new_id = str(uuid.uuid4())
 
+    target_item_id = req.item_id or req.job_id or req.explore_prompt_id
     try:
         admin = get_supabase_admin()
-        admin.table("collection_items").insert({
+        payload = {
             "id": new_id,
             "collection_id": collection_id,
             "user_id": user_id,
-            "job_id": req.job_id,
-            "explore_prompt_id": req.explore_prompt_id,
-            "image_url": req.image_url
-        }).execute()
+            "image_url": req.image_url,
+            "item_id": target_item_id,
+        }
+        if req.job_id:
+            payload["job_id"] = req.job_id
+        if req.explore_prompt_id:
+            payload["explore_prompt_id"] = req.explore_prompt_id
+        try:
+            admin.table("collection_items").insert(payload).execute()
+        except Exception as insert_err:
+            logger.warning(f"[Collections] Direct insert notice: {insert_err}. Fallback without FK.")
+            safe_payload = {
+                "id": new_id,
+                "collection_id": collection_id,
+                "user_id": user_id,
+                "image_url": req.image_url,
+                "item_id": target_item_id,
+            }
+            admin.table("collection_items").insert(safe_payload).execute()
 
         # Update collection cover image if not set
         admin.table("collections").update({
@@ -234,7 +250,7 @@ async def remove_item_from_collection(
         admin.table("collection_items")\
             .delete()\
             .eq("collection_id", collection_id)\
-            .or_(f"id.eq.{item_id},job_id.eq.{item_id},explore_prompt_id.eq.{item_id}")\
+            .or_(f"id.eq.{item_id},job_id.eq.{item_id},explore_prompt_id.eq.{item_id},item_id.eq.{item_id}")\
             .execute()
         return {"status": "success", "message": "Item removed from collection"}
     except Exception as e:
@@ -283,7 +299,7 @@ async def quick_save_bookmark(
     If not saved, adds it and returns optimistic updated state.
     """
     user_id = current_user.get("user_id")
-    target_id = req.explore_prompt_id or req.job_id
+    target_id = req.item_id or req.explore_prompt_id or req.job_id
     now_iso = datetime.now(timezone.utc).isoformat()
 
     try:
@@ -315,7 +331,7 @@ async def quick_save_bookmark(
             existing = admin.table("collection_items")\
                 .select("id")\
                 .eq("collection_id", col_id)\
-                .or_(f"job_id.eq.{target_id},explore_prompt_id.eq.{target_id}")\
+                .or_(f"job_id.eq.{target_id},explore_prompt_id.eq.{target_id},item_id.eq.{target_id}")\
                 .maybe_single()\
                 .execute()
 
@@ -325,13 +341,25 @@ async def quick_save_bookmark(
                 return {"status": "unsaved", "is_saved": False, "collection_name": "All Saved"}
             else:
                 # Save
-                admin.table("collection_items").insert({
+                qs_payload = {
                     "collection_id": col_id,
                     "user_id": user_id,
-                    "job_id": req.job_id,
-                    "explore_prompt_id": req.explore_prompt_id,
-                    "image_url": req.image_url
-                }).execute()
+                    "image_url": req.image_url,
+                    "item_id": target_id
+                }
+                if req.job_id:
+                    qs_payload["job_id"] = req.job_id
+                if req.explore_prompt_id:
+                    qs_payload["explore_prompt_id"] = req.explore_prompt_id
+                try:
+                    admin.table("collection_items").insert(qs_payload).execute()
+                except Exception as insert_err:
+                    admin.table("collection_items").insert({
+                        "collection_id": col_id,
+                        "user_id": user_id,
+                        "image_url": req.image_url,
+                        "item_id": target_id
+                    }).execute()
                 return {"status": "saved", "is_saved": True, "collection_name": "All Saved"}
     except Exception as e:
         logger.warning(f"[QuickSave] Supabase quick-save notice: {e}. Executing dev store.")
@@ -372,7 +400,7 @@ async def get_bookmark_status(
         res = admin.table("collection_items")\
             .select("collection_id")\
             .eq("user_id", user_id)\
-            .or_(f"job_id.eq.{target_id},explore_prompt_id.eq.{target_id}")\
+            .or_(f"job_id.eq.{target_id},explore_prompt_id.eq.{target_id},item_id.eq.{target_id}")\
             .execute()
         if res.data is not None:
             col_ids = [r["collection_id"] for r in res.data]

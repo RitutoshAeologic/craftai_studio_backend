@@ -5,6 +5,7 @@ import os
 import uuid
 import httpx
 import numpy as np
+import cv2
 from PIL import Image, ImageEnhance, ImageFilter, ImageDraw
 import rembg
 from typing import Optional, Tuple
@@ -12,6 +13,7 @@ from app.infrastructure.clients.base import IDiffusionGateway
 from app.infrastructure.clients.huggingface_client import HuggingFaceClient
 from app.infrastructure.clients.onnx_upscaler_client import OnnxUpscalerClient
 from app.infrastructure.storage.task_store import ITaskStore
+from app.infrastructure.storage.storage_provider import IStorageProvider, StorageFactory
 from app.infrastructure.tools import (
     IInpaintEngine,
     IColorizeEngine,
@@ -58,6 +60,7 @@ class ToolService:
         colorize_engine: Optional[IColorizeEngine] = None,
         bg_remover_engine: Optional[IBackgroundRemoverEngine] = None,
         upscaler_engine: Optional[IUpscalerEngine] = None,
+        storage_provider: Optional[IStorageProvider] = None,
         **kwargs
     ):
         self.diffusion_gateway = diffusion_gateway
@@ -68,6 +71,7 @@ class ToolService:
         self.colorize_engine = colorize_engine or ToolEngineFactory.get_colorize_engine()
         self.bg_remover_engine = bg_remover_engine or ToolEngineFactory.get_bg_remover_engine()
         self.upscaler_engine = upscaler_engine or ToolEngineFactory.get_upscaler_engine()
+        self.storage_provider = storage_provider or StorageFactory.get_storage_provider()
         self._rembg_session = None
 
     def _get_rembg_session(self):
@@ -102,6 +106,11 @@ class ToolService:
         if url.startswith("data:"):
             _, encoded = url.split(",", 1)
             return base64.b64decode(encoded)
+        if not url.startswith("http://") and not url.startswith("https://"):
+            try:
+                return base64.b64decode(url)
+            except Exception:
+                pass
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.get(url)
             if resp.status_code != 200:
@@ -109,23 +118,9 @@ class ToolService:
             return resp.content
 
     async def _upload_to_supabase(self, image_bytes: bytes, folder: str = "tool_edits", ext: str = "png") -> Optional[str]:
-        try:
-            admin = get_supabase_admin()
-            file_path = f"{folder}/{uuid.uuid4().hex}.{ext}"
-            content_type = "image/png" if ext == "png" else "image/jpeg"
-            await asyncio.wait_for(
-                asyncio.to_thread(
-                    admin.storage.from_("user_generations").upload,
-                    file_path,
-                    image_bytes,
-                    {"content-type": content_type}
-                ),
-                timeout=8.0
-            )
-            return admin.storage.from_("user_generations").get_public_url(file_path)
-        except Exception as e:
-            logger.warning(f"[Tool: Storage] Supabase upload failed for {folder}: {e}")
-            return None
+        """Delegates upload to active IStorageProvider."""
+        content_type = "image/png" if ext == "png" else "image/jpeg"
+        return await self.storage_provider.upload(image_bytes, folder=folder, file_prefix=folder, ext=ext, content_type=content_type)
 
     def _process_image_cpu(self, input_bytes: bytes, action: str, preset: str, lock_subject: bool) -> bytes:
         img = Image.open(io.BytesIO(input_bytes)).convert("RGB")
@@ -405,30 +400,127 @@ class ToolService:
         cutout = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
         w, h = cutout.size
 
-        if (mode or "").lower() == "pure_white":
-            # Pure white backdrop (#FFFFFF) with subtle ground contact shadow
+        mode_str = (mode or "").lower()
+        backdrop_str = (custom_backdrop or "").lower()
+        combo = f"{mode_str} {backdrop_str}".strip()
+
+        if "pure_white" in combo or "white" in combo:
+            # 1. Pure White Commercial E-Commerce Studio with Double Contact Shadow
             bg = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+            sy = int(h * 0.88)
+            # Soft ambient drop shadow
             shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             draw = ImageDraw.Draw(shadow)
-            shadow_y = int(h * 0.88)
-            draw.ellipse(
-                [int(w * 0.2), shadow_y - 20, int(w * 0.8), shadow_y + 20],
-                fill=(0, 0, 0, 60)
-            )
-            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=15))
+            draw.ellipse([int(w * 0.15), sy - 20, int(w * 0.85), sy + 30], fill=(0, 0, 0, 45))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=16))
+            # Sharp contact occlusion shadow under base
+            occlusion = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            o_draw = ImageDraw.Draw(occlusion)
+            o_draw.ellipse([int(w * 0.25), sy - 6, int(w * 0.75), sy + 8], fill=(0, 0, 0, 110))
+            occlusion = occlusion.filter(ImageFilter.GaussianBlur(radius=5))
+
+            bg = Image.alpha_composite(bg, shadow)
+            bg = Image.alpha_composite(bg, occlusion)
+            bg = Image.alpha_composite(bg, cutout)
+
+        elif "wood" in combo or "table" in combo or "cafe" in combo:
+            # Warm Wooden Tabletop / Cafe Atmosphere
+            bg = Image.new("RGBA", (w, h), (42, 28, 20, 255))
+            table_y = int(h * 0.65)
+            # Soft warm ambient light from top-left
+            light = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            l_draw = ImageDraw.Draw(light)
+            l_draw.ellipse([int(w * 0.1), int(h * 0.05), int(w * 0.8), int(h * 0.65)], fill=(255, 215, 175, 40))
+            light = light.filter(ImageFilter.GaussianBlur(radius=int(min(w, h) * 0.18)))
+            bg = Image.alpha_composite(bg, light)
+            # Table surface depth
+            table = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            t_draw = ImageDraw.Draw(table)
+            t_draw.rectangle([0, table_y, w, h], fill=(62, 42, 30, 230))
+            table = table.filter(ImageFilter.GaussianBlur(radius=6))
+            bg = Image.alpha_composite(bg, table)
+            # Contact shadow
+            sy = int(h * 0.87)
+            shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            s_draw = ImageDraw.Draw(shadow)
+            s_draw.ellipse([int(w * 0.18), sy - 18, int(w * 0.82), sy + 25], fill=(0, 0, 0, 140))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=14))
             bg = Image.alpha_composite(bg, shadow)
             bg = Image.alpha_composite(bg, cutout)
+
+        elif "marble" in combo or "pedestal" in combo or "luxury" in combo:
+            # Luxury Marble Studio Pedestal
+            bg = Image.new("RGBA", (w, h), (238, 240, 243, 255))
+            sy = int(h * 0.82)
+            # Overhead spotlight
+            spot = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            sp_draw = ImageDraw.Draw(spot)
+            sp_draw.ellipse([int(w * 0.15), int(h * 0.05), int(w * 0.85), int(h * 0.65)], fill=(255, 255, 255, 180))
+            spot = spot.filter(ImageFilter.GaussianBlur(radius=40))
+            bg = Image.alpha_composite(bg, spot)
+            # Marble pedestal block
+            ped = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            p_draw = ImageDraw.Draw(ped)
+            pw_start, pw_end = int(w * 0.15), int(w * 0.85)
+            p_draw.ellipse([pw_start, sy - 22, pw_end, sy + 22], fill=(215, 218, 224, 255))
+            p_draw.rectangle([pw_start, sy, pw_end, h], fill=(200, 203, 210, 255))
+            ped = ped.filter(ImageFilter.GaussianBlur(radius=2))
+            bg = Image.alpha_composite(bg, ped)
+            # Contact shadow on pedestal
+            shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            s_draw = ImageDraw.Draw(shadow)
+            s_draw.ellipse([int(w * 0.22), sy - 10, int(w * 0.78), sy + 14], fill=(0, 0, 0, 85))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=10))
+            bg = Image.alpha_composite(bg, shadow)
+            bg = Image.alpha_composite(bg, cutout)
+
+        elif "neon" in combo or "cyber" in combo or "cyberpunk" in combo:
+            # Cyberpunk / Neon Studio Backdrop
+            bg = Image.new("RGBA", (w, h), (14, 15, 22, 255))
+            neon = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            n_draw = ImageDraw.Draw(neon)
+            n_draw.ellipse([0, int(h * 0.1), int(w * 0.5), int(h * 0.9)], fill=(0, 220, 255, 45))
+            n_draw.ellipse([int(w * 0.5), int(h * 0.1), w, int(h * 0.9)], fill=(255, 0, 160, 45))
+            neon = neon.filter(ImageFilter.GaussianBlur(radius=60))
+            bg = Image.alpha_composite(bg, neon)
+            # Ground contact shadow
+            sy = int(h * 0.88)
+            shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            s_draw = ImageDraw.Draw(shadow)
+            s_draw.ellipse([int(w * 0.18), sy - 20, int(w * 0.82), sy + 30], fill=(0, 0, 0, 160))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=14))
+            bg = Image.alpha_composite(bg, shadow)
+            bg = Image.alpha_composite(bg, cutout)
+
         else:
-            # Luxury studio ambient gradient backdrop
-            bg = Image.new("RGBA", (w, h), (24, 24, 27, 255))
-            gradient = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(gradient)
-            draw.ellipse(
-                [int(w * 0.1), int(h * 0.15), int(w * 0.9), int(h * 0.85)],
-                fill=(99, 102, 241, 75)
-            )
-            gradient = gradient.filter(ImageFilter.GaussianBlur(radius=60))
-            bg = Image.alpha_composite(bg, gradient)
+            # "smart" or default: Commercial Photorealistic Studio Atmosphere
+            bg = Image.new("RGBA", (w, h), (28, 30, 36, 255))
+            # 1. Overhead key light
+            light = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            l_draw = ImageDraw.Draw(light)
+            l_draw.ellipse([int(w * 0.15), int(h * 0.05), int(w * 0.85), int(h * 0.75)], fill=(255, 255, 255, 35))
+            light = light.filter(ImageFilter.GaussianBlur(radius=int(min(w, h) * 0.16)))
+            bg = Image.alpha_composite(bg, light)
+            # 2. Studio floor gradient
+            floor_y = int(h * 0.74)
+            floor = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            f_draw = ImageDraw.Draw(floor)
+            f_draw.rectangle([0, floor_y, w, h], fill=(16, 17, 22, 170))
+            floor = floor.filter(ImageFilter.GaussianBlur(radius=6))
+            bg = Image.alpha_composite(bg, floor)
+            # 3. Double-layer contact shadow
+            sy = int(h * 0.86)
+            shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            s_draw = ImageDraw.Draw(shadow)
+            s_draw.ellipse([int(w * 0.18), sy - 22, int(w * 0.82), sy + 30], fill=(0, 0, 0, 110))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=16))
+            occlusion = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            o_draw = ImageDraw.Draw(occlusion)
+            o_draw.ellipse([int(w * 0.28), sy - 8, int(w * 0.72), sy + 10], fill=(0, 0, 0, 170))
+            occlusion = occlusion.filter(ImageFilter.GaussianBlur(radius=5))
+
+            bg = Image.alpha_composite(bg, shadow)
+            bg = Image.alpha_composite(bg, occlusion)
             bg = Image.alpha_composite(bg, cutout)
 
         out_io = io.BytesIO()
@@ -440,7 +532,11 @@ class ToolService:
         target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
         try:
             logger.info(f"[Tool: AI Background] Mode: {req.mode} | Processing: {target_url[:80]}...")
-            input_bytes = await self._download_image_bytes(target_url)
+            if getattr(req, 'image_base64', None):
+                b64 = req.image_base64.split(",", 1)[-1] if "," in req.image_base64 else req.image_base64
+                input_bytes = base64.b64decode(b64)
+            else:
+                input_bytes = await self._download_image_bytes(target_url)
 
             # 1. Background removal cutout
             session = self._get_rembg_session()
@@ -488,7 +584,7 @@ class ToolService:
                 is_free=True
             )
 
-    def _expand_canvas(self, input_bytes: bytes, target_ratio: str) -> bytes:
+    async def _expand_canvas_lama(self, input_bytes: bytes, target_ratio: str) -> bytes:
         img = Image.open(io.BytesIO(input_bytes)).convert("RGB")
         w, h = img.size
 
@@ -502,6 +598,8 @@ class ToolService:
             "3:4": (3, 4),
             "2:3": (2, 3),
             "3:2": (3, 2),
+            "2:1": (2, 1),
+            "1:2": (1, 2),
         }
         rw, rh = ratio_map.get(target_ratio, (16, 9))
         target_aspect = rw / rh
@@ -516,24 +614,56 @@ class ToolService:
             new_h = h
             new_w = int(h * target_aspect)
 
-        new_w = min(new_w, 3840)
-        new_h = min(new_h, 3840)
+        # Cap max dimension to 1280 to ensure sub-second inference while maintaining high-res detail
+        max_dim = max(new_w, new_h)
+        if max_dim > 1280:
+            scale = 1280.0 / max_dim
+            new_w = int(new_w * scale)
+            new_h = int(new_h * scale)
+            w = int(w * scale)
+            h = int(h * scale)
+            img = img.resize((w, h), resample=Image.Resampling.LANCZOS)
 
-        # Create atmospheric blurred backdrop filling the entire target ratio
-        bg = img.resize((new_w, new_h), resample=Image.Resampling.BILINEAR)
-        bg = bg.filter(ImageFilter.GaussianBlur(radius=40))
+        # Align to modulo 8 as required by LaMa Fast Fourier Convolutions
+        new_w = ((new_w + 7) // 8) * 8
+        new_h = ((new_h + 7) // 8) * 8
 
-        # Paste sharp original image centered with soft vignette edge feathering
         paste_x = (new_w - w) // 2
         paste_y = (new_h - h) // 2
 
-        # Create soft vignette mask
-        mask = Image.new("L", (w, h), 255)
-        bg.paste(img, (paste_x, paste_y), mask)
+        # 1. Create canvas with edge extension so LaMa has immediate chromatic context
+        canvas = np.zeros((new_h, new_w, 3), dtype=np.uint8)
+        np_img = np.array(img)[:, :, ::-1]  # RGB to BGR for cv2
+        canvas[paste_y:paste_y + h, paste_x:paste_x + w] = np_img
 
-        out_io = io.BytesIO()
-        bg.save(out_io, format="JPEG", quality=95, optimize=True)
-        return out_io.getvalue()
+        # Replicate edge pixels to surrounding border
+        if paste_x > 0:
+            for x in range(paste_x):
+                canvas[paste_y:paste_y + h, x] = np_img[:, 0]
+            for x in range(paste_x + w, new_w):
+                canvas[paste_y:paste_y + h, x] = np_img[:, -1]
+        if paste_y > 0:
+            for y in range(paste_y):
+                canvas[y, :] = canvas[paste_y, :]
+            for y in range(paste_y + h, new_h):
+                canvas[y, :] = canvas[paste_y + h - 1, :]
+
+        # 2. Inpaint mask: 255 (white = inpaint/synthesize), 0 (black = preserve original center)
+        mask = np.full((new_h, new_w), 255, dtype=np.uint8)
+        overlap = min(6, w // 20, h // 20)
+        mask[paste_y + overlap : paste_y + h - overlap, paste_x + overlap : paste_x + w - overlap] = 0
+
+        # 3. Encode canvas and mask to bytes
+        _, canvas_buf = cv2.imencode(".png", canvas)
+        _, mask_buf = cv2.imencode(".png", mask)
+
+        # 4. Neural Inpainting via injected InpaintEngine (LaMa)
+        out_bytes, elapsed_ms = await self.inpaint_engine.inpaint(
+            canvas_buf.tobytes(),
+            mask_buf.tobytes()
+        )
+        logger.info(f"[Tool: AI Expand] Inpainted {new_w}x{new_h} via LaMa in {elapsed_ms:.1f}ms (Zero Blur)")
+        return out_bytes
 
     async def execute_ai_expand(self, req: AiExpandRequest) -> AiExpandResponse:
         task_id = f"tool_exp_{uuid.uuid4().hex[:8]}"
@@ -542,8 +672,7 @@ class ToolService:
             logger.info(f"[Tool: AI Expand] Target Ratio: {req.target_ratio} | Processing: {target_url[:80]}...")
             input_bytes = await self._download_image_bytes(target_url)
 
-            output_bytes = await asyncio.to_thread(
-                self._expand_canvas,
+            output_bytes = await self._expand_canvas_lama(
                 input_bytes,
                 req.target_ratio or "16:9"
             )

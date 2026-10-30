@@ -12,6 +12,7 @@ from app.infrastructure.clients.sidecar_client import SidecarDiffusionClient
 from app.infrastructure.clients.local_sdxl_client import LocalSDXLClient
 from app.infrastructure.clients.diffusion_engine import CompositeDiffusionEngine
 from app.infrastructure.storage.task_store import ITaskStore, ThreadSafeInMemoryTaskStore
+from app.infrastructure.storage.storage_provider import IStorageProvider, StorageFactory
 from app.services.prompt_service import PromptService
 from app.services.vision_service import VisionService
 from app.services.tool_service import ToolService
@@ -40,6 +41,10 @@ def get_bg_remover_engine() -> IBackgroundRemoverEngine:
 @lru_cache()
 def get_upscaler_engine() -> IUpscalerEngine:
     return ToolEngineFactory.get_upscaler_engine()
+
+@lru_cache()
+def get_storage_provider() -> IStorageProvider:
+    return StorageFactory.get_storage_provider()
 
 @lru_cache()
 def get_wallet_service() -> IWalletService:
@@ -107,7 +112,8 @@ def get_tool_service(
     inpaint_engine: IInpaintEngine = Depends(get_inpaint_engine),
     colorize_engine: IColorizeEngine = Depends(get_colorize_engine),
     bg_remover_engine: IBackgroundRemoverEngine = Depends(get_bg_remover_engine),
-    upscaler_engine: IUpscalerEngine = Depends(get_upscaler_engine)
+    upscaler_engine: IUpscalerEngine = Depends(get_upscaler_engine),
+    storage_provider: IStorageProvider = Depends(get_storage_provider)
 ) -> ToolService:
     gateway = diffusion_gateway if isinstance(diffusion_gateway, IDiffusionGateway) else get_diffusion_gateway()
     store = task_store if isinstance(task_store, ITaskStore) else get_task_store()
@@ -125,7 +131,8 @@ def get_tool_service(
         inpaint_engine=inpaint,
         colorize_engine=colorize,
         bg_remover_engine=bg_rem,
-        upscaler_engine=upscale
+        upscaler_engine=upscale,
+        storage_provider=storage_provider if isinstance(storage_provider, IStorageProvider) else get_storage_provider()
     )
 
 def get_generation_service(
