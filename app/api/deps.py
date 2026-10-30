@@ -11,6 +11,7 @@ from app.infrastructure.clients.onnx_upscaler_client import OnnxUpscalerClient
 from app.infrastructure.clients.sidecar_client import SidecarDiffusionClient
 from app.infrastructure.clients.local_sdxl_client import LocalSDXLClient
 from app.infrastructure.clients.diffusion_engine import CompositeDiffusionEngine
+from app.infrastructure.clients.cloudflare_client import CloudflareAIClient
 from app.infrastructure.storage.task_store import ITaskStore, ThreadSafeInMemoryTaskStore
 from app.infrastructure.storage.storage_provider import IStorageProvider, StorageFactory
 from app.services.prompt_service import PromptService
@@ -96,6 +97,10 @@ def get_onnx_upscaler_client() -> OnnxUpscalerClient:
     return OnnxUpscalerClient()
 
 @lru_cache()
+def get_cloudflare_client() -> CloudflareAIClient:
+    return CloudflareAIClient()
+
+@lru_cache()
 def get_prompt_service() -> PromptService:
     return PromptService()
 
@@ -135,13 +140,21 @@ def get_tool_service(
         storage_provider=storage_provider if isinstance(storage_provider, IStorageProvider) else get_storage_provider()
     )
 
+from app.infrastructure.clients.local_diffusion_client import LocalDiffusionClient
+
+@lru_cache()
+def get_local_diffusion_client() -> LocalDiffusionClient:
+    return LocalDiffusionClient()
+
 def get_generation_service(
     diffusion_gateway: IDiffusionGateway = Depends(get_diffusion_gateway),
     diffusion_engine: IDiffusionEngine = Depends(get_diffusion_engine),
     task_store: ITaskStore = Depends(get_task_store),
     vision_client: GeminiVisionClient = Depends(get_vision_client),
     hf_client: HuggingFaceClient = Depends(get_huggingface_client),
-    wallet_service: IWalletService = Depends(get_wallet_service)
+    wallet_service: IWalletService = Depends(get_wallet_service),
+    cloudflare_client: CloudflareAIClient = Depends(get_cloudflare_client),
+    local_diffusion: LocalDiffusionClient = Depends(get_local_diffusion_client)
 ) -> GenerationService:
     # Safely handle standalone execution where Depends objects aren't injected by FastAPI
     gateway = diffusion_gateway if isinstance(diffusion_gateway, IDiffusionGateway) else get_diffusion_gateway()
@@ -149,6 +162,8 @@ def get_generation_service(
     store = task_store if isinstance(task_store, ITaskStore) else get_task_store()
     vision = vision_client if isinstance(vision_client, GeminiVisionClient) else get_vision_client()
     hf = hf_client if isinstance(hf_client, HuggingFaceClient) else get_huggingface_client()
+    cf = cloudflare_client if isinstance(cloudflare_client, CloudflareAIClient) else get_cloudflare_client()
+    ld = local_diffusion if isinstance(local_diffusion, LocalDiffusionClient) else get_local_diffusion_client()
 
     wallet = wallet_service if isinstance(wallet_service, IWalletService) else get_wallet_service()
     return GenerationService(
@@ -157,6 +172,8 @@ def get_generation_service(
         task_store=store,
         gemini_vision=vision,
         hf_client=hf,
-        wallet_service=wallet
+        wallet_service=wallet,
+        cloudflare_client=cf,
+        local_diffusion=ld
     )
 

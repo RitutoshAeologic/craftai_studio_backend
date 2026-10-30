@@ -26,7 +26,7 @@ class LocalSDXLClient(IDiffusionEngine):
         self.steps = steps or settings.LOCAL_SDXL_STEPS
         self.guidance = guidance or settings.LOCAL_SDXL_GUIDANCE
         self._pipe = None
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
         self._device = None
 
     def _determine_device(self) -> str:
@@ -161,6 +161,8 @@ class LocalSDXLClient(IDiffusionEngine):
             return None
 
         # Lock ensures single-flight inference on MPS to prevent Metal kernel crashes
+        if self._lock is None:
+            self._lock = asyncio.Lock()
         async with self._lock:
             try:
                 return await asyncio.to_thread(
