@@ -33,6 +33,8 @@ class PromptDeltaResponse(BaseModel):
     diff: PromptDeltaDiff
     suggested_chips: List[str] = Field(default_factory=list)
     model_used: str
+    delta_summary: Optional[str] = None
+
 
 class LLMConfigResponse(BaseModel):
     active_provider: str

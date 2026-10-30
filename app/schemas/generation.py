@@ -12,6 +12,8 @@ class GenerationDispatchRequest(BaseModel):
     seed: Optional[int] = Field(42, description="RNG Seed for reproducibility")
     model: Optional[str] = Field("flux", description="Diffusion model: flux, gemini, chatgpt")
     remixed_from_prompt_id: Optional[str] = Field(None, description="Original explore prompt ID if remixed")
+    edit_instruction: Optional[str] = Field(None, description="Direct natural language instruction for editing an active image")
+
 
 class GenerationDispatchResponse(BaseModel):
     task_id: str

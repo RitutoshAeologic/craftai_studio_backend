@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     HF_TOKEN: str = ""
     POLLINATIONS_API_KEY: str = ""
+    CLOUDFLARE_ACCOUNT_ID: str = ""
+    CLOUDFLARE_API_TOKEN: str = ""
+    CLOUDFLARE_IMAGE_MODEL: str = "@cf/black-forest-labs/flux-1-schnell"
 
     AES_SECRET_KEY: str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     STRIPE_SECRET_KEY: str = ""

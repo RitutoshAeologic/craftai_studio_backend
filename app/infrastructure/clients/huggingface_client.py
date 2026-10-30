@@ -29,13 +29,13 @@ class HuggingFaceClient:
     def _get_codeformer_client(self) -> GradioClient:
         if not self._codeformer_space:
             logger.info("[HuggingFace] Connecting to sczhou/CodeFormer space...")
-            self._codeformer_space = GradioClient("sczhou/CodeFormer", token=self.token)
+            self._codeformer_space = GradioClient("sczhou/CodeFormer", hf_token=self.token)
         return self._codeformer_space
 
     def _get_instantid_client(self) -> GradioClient:
         if not self._instantid_space:
             logger.info("[HuggingFace] Connecting to InstantX/InstantID space...")
-            self._instantid_space = GradioClient("InstantX/InstantID", token=self.token)
+            self._instantid_space = GradioClient("InstantX/InstantID", hf_token=self.token)
         return self._instantid_space
 
     async def generate_flux(
@@ -106,7 +106,7 @@ class HuggingFaceClient:
                 guidance_scale=5.0,
                 seed=seed,
                 scheduler='EulerDiscreteScheduler',
-                enable_LCM=False,
+                enable_lcm=False,
                 enhance_face_region=True,
                 api_name='/generate_image'
             )

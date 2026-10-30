@@ -17,10 +17,11 @@ prompt_engineering_router.include_router(auth_router)
 
 api_v1_router.include_router(prompt_engineering_router)
 
-# Direct root aliasing for vision, tools, and auth to prevent 404 on clients calling without /prompt-engineering prefix
+# Direct root aliasing for vision, tools, auth, and generation to prevent 404 on clients calling without /prompt-engineering prefix
 api_v1_router.include_router(vision_router)
 api_v1_router.include_router(tools_router)
 api_v1_router.include_router(auth_router)
+api_v1_router.include_router(generation_router)
 
 
 @api_v1_router.get("/health", tags=["Health"])
