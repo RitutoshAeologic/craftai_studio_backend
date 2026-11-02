@@ -1,3 +1,4 @@
+import re
 from typing import Optional
 from fastapi import APIRouter, Depends, Query, HTTPException
 from app.core.supabase_client import get_supabase_admin
@@ -22,16 +23,18 @@ async def delete_library_job(
 
     try:
         admin = get_supabase_admin()
+        is_uuid = bool(re.match(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", str(job_id)))
 
         # 1. Lookup job record to resolve image storage path if not passed
         if not target_url:
-            job_res = admin.table("jobs")\
-                .select("preview_url, master_url, image_url")\
-                .or_(f"id.eq.{job_id},job_id.eq.{job_id}")\
-                .maybe_single()\
-                .execute()
+            query = admin.table("jobs").select("preview_url, master_url, image_url, preview_image_url")
+            if is_uuid:
+                query = query.or_(f"id.eq.{job_id},job_id.eq.{job_id}")
+            else:
+                query = query.eq("job_id", job_id)
+            job_res = query.maybe_single().execute()
             if job_res and job_res.data:
-                target_url = job_res.data.get("preview_url") or job_res.data.get("image_url") or job_res.data.get("master_url")
+                target_url = job_res.data.get("preview_url") or job_res.data.get("preview_image_url") or job_res.data.get("image_url") or job_res.data.get("master_url")
 
         # 2. Extract relative path and remove from user_generations bucket
         if target_url:
@@ -39,7 +42,6 @@ async def delete_library_job(
                 if folder in target_url:
                     idx = target_url.find(folder)
                     rel_path = target_url[idx:].split("?")[0]
-                    # Strip leading bucket folder if needed
                     clean_path = rel_path.replace("user_generations/", "")
                     try:
                         admin.storage.from_("user_generations").remove([clean_path, rel_path])
@@ -51,20 +53,28 @@ async def delete_library_job(
 
         # 3. Delete from collection_items referencing this job
         try:
-            admin.table("collection_items").delete().or_(f"job_id.eq.{job_id},item_id.eq.{job_id}").execute()
+            if is_uuid:
+                admin.table("collection_items").delete().or_(f"job_id.eq.{job_id},item_id.eq.{job_id}").execute()
+            else:
+                admin.table("collection_items").delete().eq("job_id", job_id).execute()
         except Exception:
             pass
 
         # 4. Delete from jobs table
-        import re
-        is_uuid = bool(re.match(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", job_id))
         if is_uuid:
             delete_query = admin.table("jobs").delete().or_(f"id.eq.{job_id},job_id.eq.{job_id}")
         else:
             delete_query = admin.table("jobs").delete().eq("job_id", job_id)
-        if user_id and user_id not in ("undefined", "null", "guest"):
+        if user_id and user_id not in ("undefined", "null", "guest", "00000000-0000-0000-0000-000000000000"):
             delete_query = delete_query.eq("user_id", user_id)
         res = delete_query.execute()
+
+        # Fallback delete by image URL if row exists with null or mismatched job_id
+        if target_url:
+            try:
+                admin.table("jobs").delete().or_(f"preview_url.eq.{target_url},preview_image_url.eq.{target_url}").execute()
+            except Exception:
+                pass
 
         logger.info(f"[Library] Purged job {job_id} (user={user_id}, storage_cleared={deleted_storage})")
         return {
