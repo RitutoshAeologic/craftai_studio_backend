@@ -25,15 +25,15 @@ prompt_engineering_router.include_router(library_router)
 
 api_v1_router.include_router(prompt_engineering_router)
 
-# Direct root aliasing to prevent 404 on web clients calling without /prompt-engineering prefix
+# Direct root aliasing to prevent 404 on clients calling without /prompt-engineering prefix
 api_v1_router.include_router(vision_router)
 api_v1_router.include_router(tools_router)
 api_v1_router.include_router(auth_router)
+api_v1_router.include_router(generation_router)
 api_v1_router.include_router(collections_router)
 api_v1_router.include_router(search_router)
 api_v1_router.include_router(remix_router)
 api_v1_router.include_router(library_router)
-api_v1_router.include_router(generation_router)
 api_v1_router.include_router(prompt_router)
 
 

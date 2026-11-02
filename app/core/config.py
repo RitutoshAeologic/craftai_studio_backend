@@ -29,11 +29,19 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     HF_TOKEN: str = ""
     POLLINATIONS_API_KEY: str = ""
+    CLOUDFLARE_ACCOUNT_ID: str = ""
+    CLOUDFLARE_API_TOKEN: str = ""
+    CLOUDFLARE_IMAGE_MODEL: str = "@cf/black-forest-labs/flux-1-schnell"
+
+    # Local Ollama LLM Configuration
+    OLLAMA_MODEL: str = "qwen3.5:9b"
+    OLLAMA_ENDPOINT: str = "http://127.0.0.1:11434"
 
     # Diffusion Engine (Local MPS / Sidecar Worker / Cloud Gateway)
     LOCAL_DIFFUSION_ENABLED: bool = True
     DIFFUSION_BACKEND: str = "auto"  # "auto", "sidecar", "local", "huggingface", "pollinations"
     DIFFUSION_SIDECAR_URL: str = "http://127.0.0.1:8001"
+    LOCAL_DIFFUSION_ENDPOINT: str = "http://127.0.0.1:8002"
     LOCAL_SDXL_BASE_MODEL: str = "SG161222/RealVisXL_V4.0"
     LOCAL_SDXL_LORA_REPO: str = "ByteDance/SDXL-Lightning"
     LOCAL_SDXL_LORA_WEIGHT: str = "sdxl_lightning_4step_lora.safetensors"

@@ -19,6 +19,8 @@ class GenerationDispatchRequest(BaseModel):
     model: Optional[str] = Field("flux", description="Diffusion model: flux, gemini, chatgpt")
     remixed_from_prompt_id: Optional[str] = Field(None, description="Original explore prompt ID if remixed")
     remixedFromPromptId: Optional[str] = None
+    edit_instruction: Optional[str] = Field(None, description="Direct natural language instruction for editing an active image")
+    editInstruction: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -42,6 +44,9 @@ class GenerationDispatchRequest(BaseModel):
             remix = data.get("remixed_from_prompt_id") or data.get("remixedFromPromptId")
             if remix:
                 data["remixed_from_prompt_id"] = str(remix)
+            edit = data.get("edit_instruction") or data.get("editInstruction")
+            if edit:
+                data["edit_instruction"] = str(edit)
             # Aspect ratio to width/height fallback
             ratio = data.get("aspect_ratio") or data.get("aspectRatio")
             if ratio and (not data.get("width") or not data.get("height")):
