@@ -62,6 +62,77 @@ async def tool_ai_background(
     """Pure white e-commerce cutout or smart studio background synthesis."""
     return await service.execute_ai_background(req)
 
+
+@router.get("/tools/ai-background/templates")
+async def get_ai_background_templates():
+    """Returns available AI background backdrop presets with metadata & credit costs."""
+    return {
+        "status": "success",
+        "templates": [
+            {
+                "id": "pure_white",
+                "title": "Pure white",
+                "subtitle": "Commercial Cyclo",
+                "icon": "⚪",
+                "mode": "pure_white",
+                "backdrop": "",
+                "is_free": True,
+                "credits": 0
+            },
+            {
+                "id": "smart",
+                "title": "Smart Studio",
+                "subtitle": "Product Keylight",
+                "icon": "🏢",
+                "mode": "smart",
+                "backdrop": "commercial photorealistic studio keylight",
+                "is_free": False,
+                "credits": 10
+            },
+            {
+                "id": "marble",
+                "title": "Luxury Marble",
+                "subtitle": "Studio Pedestal",
+                "icon": "🏛️",
+                "mode": "marble",
+                "backdrop": "luxury marble pedestal overhead soft spotlight",
+                "is_free": False,
+                "credits": 10
+            },
+            {
+                "id": "wood",
+                "title": "Warm Wood",
+                "subtitle": "Cozy Cafe Table",
+                "icon": "🪵",
+                "mode": "wood",
+                "backdrop": "warm wooden tabletop cafe ambient lighting",
+                "is_free": False,
+                "credits": 10
+            },
+            {
+                "id": "neon",
+                "title": "Cyber Neon",
+                "subtitle": "Futuristic Glow",
+                "icon": "🌆",
+                "mode": "neon",
+                "backdrop": "cyberpunk neon city illumination reflections",
+                "is_free": False,
+                "credits": 10
+            },
+            {
+                "id": "custom",
+                "title": "Custom Backdrop",
+                "subtitle": "Write Any Prompt",
+                "icon": "✍️",
+                "mode": "custom",
+                "backdrop": "",
+                "is_free": False,
+                "credits": 10
+            }
+        ]
+    }
+
+
 @router.post("/tools/ai-expand", response_model=AiExpandResponse)
 async def tool_ai_expand(
     req: AiExpandRequest,

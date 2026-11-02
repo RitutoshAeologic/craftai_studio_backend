@@ -5,6 +5,21 @@ class CollectionCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Collection name")
     description: Optional[str] = Field(None, max_length=500, description="Optional description")
     is_private: bool = Field(True, description="Private to user or public")
+    isPrivate: Optional[bool] = None
+    cover_image_url: Optional[str] = None
+    coverImageUrl: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            priv = data.get("is_private") if data.get("is_private") is not None else data.get("isPrivate")
+            if priv is not None:
+                data["is_private"] = bool(priv)
+            cover = data.get("cover_image_url") or data.get("coverImageUrl")
+            if cover:
+                data["cover_image_url"] = str(cover)
+        return data
 
 class CollectionItemAddRequest(BaseModel):
     job_id: Optional[str] = Field(None, description="Supabase jobs.id reference")

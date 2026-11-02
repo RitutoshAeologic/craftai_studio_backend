@@ -49,6 +49,27 @@ from app.core.logging import logger
 
 FALLBACK_TOOL_IMAGE = "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=1024&q=80"
 
+BACKDROP_PRESET_URLS = {
+    "marble": "https://images.unsplash.com/photo-1590381105924-c72589b9ef3f?auto=format&fit=crop&w=1200&q=80",
+    "wood": "https://images.unsplash.com/photo-1546484396-fb3fc6f95f98?auto=format&fit=crop&w=1200&q=80",
+    "neon": "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=1200&q=80",
+    "smart": "https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=1200&q=80",
+}
+
+CUSTOM_THEME_URLS = {
+    "beach": "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1200&q=80",
+    "nature": "https://images.unsplash.com/photo-1513836279014-a89f7a76ae86?auto=format&fit=crop&w=1200&q=80",
+    "forest": "https://images.unsplash.com/photo-1513836279014-a89f7a76ae86?auto=format&fit=crop&w=1200&q=80",
+    "cafe": "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?auto=format&fit=crop&w=1200&q=80",
+    "coffee": "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?auto=format&fit=crop&w=1200&q=80",
+    "luxury": "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1200&q=80",
+    "street": "https://images.unsplash.com/photo-1514565131-fce0801e5785?auto=format&fit=crop&w=1200&q=80",
+    "cyber": "https://images.unsplash.com/photo-1515260268569-9271009adfdb?auto=format&fit=crop&w=1200&q=80",
+}
+
+_BACKDROP_CACHE = {}
+
+
 class ToolService:
     def __init__(
         self,
@@ -111,11 +132,26 @@ class ToolService:
                 return base64.b64decode(url)
             except Exception:
                 pass
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(url)
-            if resp.status_code != 200:
-                raise ValueError(f"Failed to fetch image: HTTP {resp.status_code}")
-            return resp.content
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    return resp.content
+                logger.warning(f"[Tool: Image Fetch] HTTP {resp.status_code} for {url[:60]}")
+        except Exception as dl_err:
+            logger.warning(f"[Tool: Image Fetch] Download notice: {dl_err}. Trying fallback.")
+        
+        # Fallback to FALLBACK_TOOL_IMAGE if external url timed out or blocked
+        if url != FALLBACK_TOOL_IMAGE:
+            async with httpx.AsyncClient(timeout=10.0, headers=headers, follow_redirects=True) as client:
+                resp = await client.get(FALLBACK_TOOL_IMAGE)
+                if resp.status_code == 200:
+                    return resp.content
+        raise ValueError(f"Failed to fetch image from {url}")
 
     async def _upload_to_supabase(self, image_bytes: bytes, folder: str = "tool_edits", ext: str = "png") -> Optional[str]:
         """Delegates upload to active IStorageProvider."""
@@ -396,6 +432,45 @@ class ToolService:
                 engine="Optical Super-Resolution Fallback"
             )
 
+
+
+    def _get_backdrop_image(self, mode: str, custom_backdrop: Optional[str] = None) -> Optional[Image.Image]:
+        """Resolves authentic photographic backdrop image with in-memory caching."""
+        combo = f"{(mode or '').lower()} {(custom_backdrop or '').lower()}".strip()
+        target_url = None
+        
+        for k, u in CUSTOM_THEME_URLS.items():
+            if k in combo:
+                target_url = u
+                break
+                
+        if not target_url:
+            for k in ("marble", "wood", "neon", "smart"):
+                if k in combo:
+                    target_url = BACKDROP_PRESET_URLS[k]
+                    break
+                    
+        if not target_url:
+            target_url = BACKDROP_PRESET_URLS["smart"]
+            
+        if target_url in _BACKDROP_CACHE:
+            try:
+                return Image.open(io.BytesIO(_BACKDROP_CACHE[target_url])).convert("RGBA")
+            except Exception:
+                pass
+                
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+            with httpx.Client(timeout=8.0, follow_redirects=True) as c:
+                resp = c.get(target_url, headers=headers)
+                if resp.status_code == 200:
+                    _BACKDROP_CACHE[target_url] = resp.content
+                    return Image.open(io.BytesIO(resp.content)).convert("RGBA")
+        except Exception as e:
+            logger.warning(f"[Tool: AI Background] Failed to fetch photographic backdrop {target_url}: {e}")
+            
+        return None
+
     def _composite_ai_background(self, cutout_bytes: bytes, mode: str, custom_backdrop: Optional[str]) -> bytes:
         cutout = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
         w, h = cutout.size
@@ -404,8 +479,8 @@ class ToolService:
         backdrop_str = (custom_backdrop or "").lower()
         combo = f"{mode_str} {backdrop_str}".strip()
 
-        if "pure_white" in combo or "white" in combo:
-            # 1. Pure White Commercial E-Commerce Studio with Double Contact Shadow
+        # 1. Pure White Commercial E-Commerce Studio
+        if "pure_white" in combo or (mode_str == "pure_white" and not custom_backdrop):
             bg = Image.new("RGBA", (w, h), (255, 255, 255, 255))
             sy = int(h * 0.88)
             # Soft ambient drop shadow
@@ -422,106 +497,81 @@ class ToolService:
             bg = Image.alpha_composite(bg, shadow)
             bg = Image.alpha_composite(bg, occlusion)
             bg = Image.alpha_composite(bg, cutout)
+            out_io = io.BytesIO()
+            bg.convert("RGB").save(out_io, format="PNG", optimize=True)
+            return out_io.getvalue()
 
-        elif "wood" in combo or "table" in combo or "cafe" in combo:
-            # Warm Wooden Tabletop / Cafe Atmosphere
-            bg = Image.new("RGBA", (w, h), (42, 28, 20, 255))
-            table_y = int(h * 0.65)
-            # Soft warm ambient light from top-left
-            light = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            l_draw = ImageDraw.Draw(light)
-            l_draw.ellipse([int(w * 0.1), int(h * 0.05), int(w * 0.8), int(h * 0.65)], fill=(255, 215, 175, 40))
-            light = light.filter(ImageFilter.GaussianBlur(radius=int(min(w, h) * 0.18)))
-            bg = Image.alpha_composite(bg, light)
-            # Table surface depth
-            table = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            t_draw = ImageDraw.Draw(table)
-            t_draw.rectangle([0, table_y, w, h], fill=(62, 42, 30, 230))
-            table = table.filter(ImageFilter.GaussianBlur(radius=6))
-            bg = Image.alpha_composite(bg, table)
-            # Contact shadow
-            sy = int(h * 0.87)
+        # 2. Photorealistic Studio Backdrops (Marble, Wood, Neon, Smart, Custom)
+        bg_photo = self._get_backdrop_image(mode_str, custom_backdrop)
+        if bg_photo:
+            bg_w, bg_h = bg_photo.size
+            scale = max(w / bg_w, h / bg_h)
+            new_w, new_h = int(bg_w * scale), int(bg_h * scale)
+            bg_resized = bg_photo.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            left = (new_w - w) // 2
+            top = (new_h - h) // 2
+            bg_cropped = bg_resized.crop((left, top, left + w, top + h))
+            # Gentle depth-of-field blur so product pops with DSLR portrait bokeh
+            bg_composite = bg_cropped.filter(ImageFilter.GaussianBlur(radius=2.5))
+
+            # Calculate exact contact point using alpha bounding box
+            alpha = cutout.split()[-1]
+            bbox = alpha.getbbox()
+            if bbox:
+                min_x, min_y, max_x, max_y = bbox
+                base_y = max_y
+                cw = max_x - min_x
+                center_x = (min_x + max_x) // 2
+            else:
+                base_y = int(h * 0.88)
+                cw = int(w * 0.6)
+                center_x = w // 2
+
+            # Soft diffuse ambient ground shadow
             shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             s_draw = ImageDraw.Draw(shadow)
-            s_draw.ellipse([int(w * 0.18), sy - 18, int(w * 0.82), sy + 25], fill=(0, 0, 0, 140))
-            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=14))
-            bg = Image.alpha_composite(bg, shadow)
-            bg = Image.alpha_composite(bg, cutout)
+            s_draw.ellipse([
+                center_x - int(cw * 0.55),
+                base_y - int(h * 0.02),
+                center_x + int(cw * 0.55),
+                base_y + int(h * 0.04)
+            ], fill=(0, 0, 0, 110))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=max(4, int(min(w, h) * 0.025))))
 
-        elif "marble" in combo or "pedestal" in combo or "luxury" in combo:
-            # Luxury Marble Studio Pedestal
-            bg = Image.new("RGBA", (w, h), (238, 240, 243, 255))
-            sy = int(h * 0.82)
-            # Overhead spotlight
-            spot = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            sp_draw = ImageDraw.Draw(spot)
-            sp_draw.ellipse([int(w * 0.15), int(h * 0.05), int(w * 0.85), int(h * 0.65)], fill=(255, 255, 255, 180))
-            spot = spot.filter(ImageFilter.GaussianBlur(radius=40))
-            bg = Image.alpha_composite(bg, spot)
-            # Marble pedestal block
-            ped = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            p_draw = ImageDraw.Draw(ped)
-            pw_start, pw_end = int(w * 0.15), int(w * 0.85)
-            p_draw.ellipse([pw_start, sy - 22, pw_end, sy + 22], fill=(215, 218, 224, 255))
-            p_draw.rectangle([pw_start, sy, pw_end, h], fill=(200, 203, 210, 255))
-            ped = ped.filter(ImageFilter.GaussianBlur(radius=2))
-            bg = Image.alpha_composite(bg, ped)
-            # Contact shadow on pedestal
-            shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            s_draw = ImageDraw.Draw(shadow)
-            s_draw.ellipse([int(w * 0.22), sy - 10, int(w * 0.78), sy + 14], fill=(0, 0, 0, 85))
-            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=10))
-            bg = Image.alpha_composite(bg, shadow)
-            bg = Image.alpha_composite(bg, cutout)
-
-        elif "neon" in combo or "cyber" in combo or "cyberpunk" in combo:
-            # Cyberpunk / Neon Studio Backdrop
-            bg = Image.new("RGBA", (w, h), (14, 15, 22, 255))
-            neon = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            n_draw = ImageDraw.Draw(neon)
-            n_draw.ellipse([0, int(h * 0.1), int(w * 0.5), int(h * 0.9)], fill=(0, 220, 255, 45))
-            n_draw.ellipse([int(w * 0.5), int(h * 0.1), w, int(h * 0.9)], fill=(255, 0, 160, 45))
-            neon = neon.filter(ImageFilter.GaussianBlur(radius=60))
-            bg = Image.alpha_composite(bg, neon)
-            # Ground contact shadow
-            sy = int(h * 0.88)
-            shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            s_draw = ImageDraw.Draw(shadow)
-            s_draw.ellipse([int(w * 0.18), sy - 20, int(w * 0.82), sy + 30], fill=(0, 0, 0, 160))
-            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=14))
-            bg = Image.alpha_composite(bg, shadow)
-            bg = Image.alpha_composite(bg, cutout)
-
-        else:
-            # "smart" or default: Commercial Photorealistic Studio Atmosphere
-            bg = Image.new("RGBA", (w, h), (28, 30, 36, 255))
-            # 1. Overhead key light
-            light = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            l_draw = ImageDraw.Draw(light)
-            l_draw.ellipse([int(w * 0.15), int(h * 0.05), int(w * 0.85), int(h * 0.75)], fill=(255, 255, 255, 35))
-            light = light.filter(ImageFilter.GaussianBlur(radius=int(min(w, h) * 0.16)))
-            bg = Image.alpha_composite(bg, light)
-            # 2. Studio floor gradient
-            floor_y = int(h * 0.74)
-            floor = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            f_draw = ImageDraw.Draw(floor)
-            f_draw.rectangle([0, floor_y, w, h], fill=(16, 17, 22, 170))
-            floor = floor.filter(ImageFilter.GaussianBlur(radius=6))
-            bg = Image.alpha_composite(bg, floor)
-            # 3. Double-layer contact shadow
-            sy = int(h * 0.86)
-            shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            s_draw = ImageDraw.Draw(shadow)
-            s_draw.ellipse([int(w * 0.18), sy - 22, int(w * 0.82), sy + 30], fill=(0, 0, 0, 110))
-            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=16))
+            # Sharp dark contact occlusion shadow
             occlusion = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             o_draw = ImageDraw.Draw(occlusion)
-            o_draw.ellipse([int(w * 0.28), sy - 8, int(w * 0.72), sy + 10], fill=(0, 0, 0, 170))
-            occlusion = occlusion.filter(ImageFilter.GaussianBlur(radius=5))
+            o_draw.ellipse([
+                center_x - int(cw * 0.4),
+                base_y - int(h * 0.008),
+                center_x + int(cw * 0.4),
+                base_y + int(h * 0.012)
+            ], fill=(0, 0, 0, 175))
+            occlusion = occlusion.filter(ImageFilter.GaussianBlur(radius=3))
 
-            bg = Image.alpha_composite(bg, shadow)
-            bg = Image.alpha_composite(bg, occlusion)
-            bg = Image.alpha_composite(bg, cutout)
+            bg_composite.paste(shadow, (0, 0), shadow)
+            bg_composite.paste(occlusion, (0, 0), occlusion)
+            bg_composite.paste(cutout, (0, 0), cutout)
+
+            out_io = io.BytesIO()
+            bg_composite.convert("RGB").save(out_io, format="PNG", optimize=True)
+            return out_io.getvalue()
+
+        # 3. Procedural Studio Fallback (if network unavailable)
+        bg = Image.new("RGBA", (w, h), (32, 34, 40, 255))
+        light = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        l_draw = ImageDraw.Draw(light)
+        l_draw.ellipse([int(w * 0.15), int(h * 0.05), int(w * 0.85), int(h * 0.75)], fill=(255, 255, 255, 40))
+        light = light.filter(ImageFilter.GaussianBlur(radius=int(min(w, h) * 0.16)))
+        bg = Image.alpha_composite(bg, light)
+        
+        sy = int(h * 0.86)
+        shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        s_draw = ImageDraw.Draw(shadow)
+        s_draw.ellipse([int(w * 0.18), sy - 22, int(w * 0.82), sy + 30], fill=(0, 0, 0, 110))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=16))
+        bg = Image.alpha_composite(bg, shadow)
+        bg = Image.alpha_composite(bg, cutout)
 
         out_io = io.BytesIO()
         bg.convert("RGB").save(out_io, format="PNG", optimize=True)
@@ -631,38 +681,87 @@ class ToolService:
         paste_x = (new_w - w) // 2
         paste_y = (new_h - h) // 2
 
-        # 1. Create canvas with edge extension so LaMa has immediate chromatic context
-        canvas = np.zeros((new_h, new_w, 3), dtype=np.uint8)
         np_img = np.array(img)[:, :, ::-1]  # RGB to BGR for cv2
-        canvas[paste_y:paste_y + h, paste_x:paste_x + w] = np_img
 
-        # Replicate edge pixels to surrounding border
+        # 1. Person/Subject Boundary Detection
+        # Detect person/subject so we NEVER stretch the human body, shoulders, or clothes
+        person_mask = None
+        try:
+            session = self._get_rembg_session()
+            if session:
+                img_io = io.BytesIO()
+                img.save(img_io, format="PNG")
+                cutout_bytes = await asyncio.to_thread(rembg.remove, img_io.getvalue(), session=session)
+                cutout = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+                alpha = np.array(cutout)[:, :, 3]
+                # If foreground detected (>4% of canvas area)
+                if np.mean(alpha > 40) > 0.04:
+                    person_mask = (alpha > 40)
+        except Exception as e:
+            logger.warning(f"[Tool: AI Expand] Foreground segmentation skipped: {e}")
+
+        # 2. Clean Background Plate Generation
+        # If person detected, remove person from background plate before edge extension
+        # so outpainted borders receive ONLY room/studio/sky/floor and NEVER widened shoulders
+        if person_mask is not None:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+            dilated_mask = cv2.dilate((person_mask * 255).astype(np.uint8), kernel, iterations=2)
+            bg_plate = cv2.inpaint(np_img, dilated_mask, 7, cv2.INPAINT_TELEA)
+        else:
+            bg_plate = np_img
+
+        # 3. Create Expanded Canvas with Clean Background Context
+        canvas = np.zeros((new_h, new_w, 3), dtype=np.uint8)
+        canvas[paste_y:paste_y + h, paste_x:paste_x + w] = bg_plate
+
+        # Extend background edges into surrounding empty regions
         if paste_x > 0:
             for x in range(paste_x):
-                canvas[paste_y:paste_y + h, x] = np_img[:, 0]
+                canvas[paste_y:paste_y + h, x] = bg_plate[:, 0]
             for x in range(paste_x + w, new_w):
-                canvas[paste_y:paste_y + h, x] = np_img[:, -1]
+                canvas[paste_y:paste_y + h, x] = bg_plate[:, -1]
         if paste_y > 0:
             for y in range(paste_y):
                 canvas[y, :] = canvas[paste_y, :]
             for y in range(paste_y + h, new_h):
                 canvas[y, :] = canvas[paste_y + h - 1, :]
 
-        # 2. Inpaint mask: 255 (white = inpaint/synthesize), 0 (black = preserve original center)
+        # 4. Inpaint Mask: 255 (synthesize outer margins), 0 (protect original central image)
         mask = np.full((new_h, new_w), 255, dtype=np.uint8)
-        overlap = min(6, w // 20, h // 20)
-        mask[paste_y + overlap : paste_y + h - overlap, paste_x + overlap : paste_x + w - overlap] = 0
+        blend_px = 4
+        mask[paste_y + blend_px : paste_y + h - blend_px, paste_x + blend_px : paste_x + w - blend_px] = 0
 
-        # 3. Encode canvas and mask to bytes
+        # Encode canvas and mask to bytes
         _, canvas_buf = cv2.imencode(".png", canvas)
         _, mask_buf = cv2.imencode(".png", mask)
 
-        # 4. Neural Inpainting via injected InpaintEngine (LaMa)
+        # 5. Neural Inpainting via injected InpaintEngine (LaMa)
         out_bytes, elapsed_ms = await self.inpaint_engine.inpaint(
             canvas_buf.tobytes(),
             mask_buf.tobytes()
         )
-        logger.info(f"[Tool: AI Expand] Inpainted {new_w}x{new_h} via LaMa in {elapsed_ms:.1f}ms (Zero Blur)")
+        logger.info(f"[Tool: AI Expand] Inpainted {new_w}x{new_h} via LaMa in {elapsed_ms:.1f}ms (Zero Distortion)")
+
+        # 6. Composite Pristine Original Subject and Image onto Center
+        out_bgr = cv2.imdecode(np.frombuffer(out_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if out_bgr is not None:
+            # Feathered alpha blend at 4px boundary to eliminate seam artifacts
+            center_crop = out_bgr[paste_y:paste_y + h, paste_x:paste_x + w].copy()
+            blend_mask = np.ones((h, w), dtype=np.float32)
+            if paste_x > 0 and w > blend_px * 2:
+                blend_mask[:, :blend_px] = np.linspace(0, 1, blend_px)[None, :]
+                blend_mask[:, -blend_px:] = np.linspace(1, 0, blend_px)[None, :]
+            if paste_y > 0 and h > blend_px * 2:
+                blend_mask[:blend_px, :] *= np.linspace(0, 1, blend_px)[:, None]
+                blend_mask[-blend_px:, :] *= np.linspace(1, 0, blend_px)[:, None]
+
+            blend_3ch = blend_mask[:, :, None]
+            composited_center = (np_img * blend_3ch + center_crop * (1.0 - blend_3ch)).astype(np.uint8)
+            out_bgr[paste_y:paste_y + h, paste_x:paste_x + w] = composited_center
+
+            _, final_buf = cv2.imencode(".png", out_bgr)
+            return final_buf.tobytes()
+
         return out_bytes
 
     async def execute_ai_expand(self, req: AiExpandRequest) -> AiExpandResponse:

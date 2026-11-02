@@ -12,12 +12,17 @@ class ToolPresetRequest(BaseModel):
     @classmethod
     def normalize_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            if "imageUrl" in data and not data.get("image_url"):
-                data["image_url"] = data["imageUrl"]
-            if "imageId" in data and not data.get("image_id"):
-                data["image_id"] = data["imageId"]
-            if not data.get("image_id"):
-                data["image_id"] = "job_default"
+            url = data.get("image_url") or data.get("imageUrl") or data.get("url")
+            if url:
+                data["image_url"] = url
+            iid = data.get("image_id") or data.get("imageId")
+            data["image_id"] = iid or "job_default"
+            tp = data.get("target_preset") or data.get("targetPreset") or data.get("preset")
+            if tp:
+                data["target_preset"] = tp
+            ls = data.get("lock_subject") if data.get("lock_subject") is not None else data.get("lockSubject")
+            if ls is not None:
+                data["lock_subject"] = bool(ls)
         return data
 
 class ToolPresetResponse(BaseModel):
@@ -257,8 +262,11 @@ class RemoveObjectRequest(BaseModel):
     mask_url: Optional[str] = Field(default=None, description="Mask URL or Base64 data URL (white=erase, black=keep)")
     maskUrl: Optional[str] = None
     image_base64: Optional[str] = None
+    imageBase64: Optional[str] = None
     mask_base64: Optional[str] = None
+    maskBase64: Optional[str] = None
     user_id: Optional[str] = None
+    userId: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -270,6 +278,15 @@ class RemoveObjectRequest(BaseModel):
             mask = data.get("mask_url") or data.get("maskUrl") or data.get("mask")
             if mask:
                 data["mask_url"] = mask
+            img_b64 = data.get("image_base64") or data.get("imageBase64")
+            if img_b64:
+                data["image_base64"] = img_b64
+            mask_b64 = data.get("mask_base64") or data.get("maskBase64")
+            if mask_b64:
+                data["mask_base64"] = mask_b64
+            uid = data.get("user_id") or data.get("userId")
+            if uid:
+                data["user_id"] = uid
         return data
 
 class RemoveObjectResponse(BaseModel):
@@ -287,8 +304,10 @@ class ColorizeRequest(BaseModel):
     image_url: Optional[str] = Field(default=None, description="Image URL or Base64 data URL to colorize")
     imageUrl: Optional[str] = None
     image_base64: Optional[str] = None
+    imageBase64: Optional[str] = None
     saturation: float = Field(default=1.0, description="Color saturation multiplier: 0.5 to 2.0")
     user_id: Optional[str] = None
+    userId: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -297,6 +316,12 @@ class ColorizeRequest(BaseModel):
             url = data.get("image_url") or data.get("imageUrl") or data.get("url")
             if url:
                 data["image_url"] = url
+            b64 = data.get("image_base64") or data.get("imageBase64")
+            if b64:
+                data["image_base64"] = b64
+            uid = data.get("user_id") or data.get("userId")
+            if uid:
+                data["user_id"] = uid
         return data
 
 class ColorizeResponse(BaseModel):
