@@ -1,0 +1,32 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: craftai_studio_backend
+    env_file:
+      - .env
+    environment:
+      PORT: "8000"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ./storage/generations:/app/storage/generations
+    restart: unless-stopped
+    networks:
+      - craftai-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: craftai_backend_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - craftai-network
+
+networks:
+  craftai-network:
+    driver: bridge
+
