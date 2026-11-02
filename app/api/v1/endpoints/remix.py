@@ -207,7 +207,7 @@ async def send_remix_chat_message(
         model_used = delta_res.model_used
     except Exception as e:
         logger.warning(f"[Remix] LLM delta fallback: {e}")
-        compiled_prompt = f"{session["current_prompt"]}, {req.user_instruction}, 8k resolution, cinematic lighting"
+        compiled_prompt = f"{session['current_prompt']}, {req.user_instruction}, 8k resolution, cinematic lighting"
         diff_added = [req.user_instruction]
         diff_removed = []
         suggested_chips = DEFAULT_SUGGESTED_CHIPS
@@ -235,7 +235,7 @@ async def send_remix_chat_message(
     if req.style_weight is not None:
         session["style_weight"] = req.style_weight
 
-    logger.info(f"[Remix] Refined session {session_id} turn {session["turn_count"]} in {elapsed_ms}ms")
+    logger.info(f"[Remix] Refined session {session_id} turn {session['turn_count']} in {elapsed_ms}ms")
     return RemixChatTurnResponse(
         session_id=session_id,
         compiled_prompt=compiled_prompt,
