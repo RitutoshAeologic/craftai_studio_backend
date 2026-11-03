@@ -6,7 +6,7 @@ import uuid
 import httpx
 import numpy as np
 import cv2
-from PIL import Image, ImageEnhance, ImageFilter, ImageDraw
+from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageOps
 import rembg
 from typing import Optional, Tuple
 from app.infrastructure.clients.base import IDiffusionGateway
@@ -97,16 +97,90 @@ class ToolService:
 
     def _get_rembg_session(self):
         if self._rembg_session is None:
-            try:
-                self._rembg_session = rembg.new_session("u2net")
-            except Exception as e:
-                logger.warning(f"[Tool: Background Removal] Failed to load u2net session ({e}), falling back to u2netp")
+            # SOTA priority: birefnet-general-lite -> isnet-general-use -> u2net -> u2netp
+            for model_name in ["birefnet-general-lite", "isnet-general-use", "u2net"]:
+                try:
+                    self._rembg_session = rembg.new_session(model_name)
+                    logger.info(f"[Tool: Background Removal] Loaded {model_name} session")
+                    break
+                except Exception as e:
+                    logger.warning(f"[Tool: Background Removal] Model {model_name} load notice: {e}")
+            if self._rembg_session is None:
                 try:
                     self._rembg_session = rembg.new_session("u2netp")
                 except Exception as e2:
                     logger.error(f"[Tool: Background Removal] Could not load rembg session: {e2}")
                     self._rembg_session = None
         return self._rembg_session
+
+    @staticmethod
+    def _normalize_image_orientation(image_bytes: bytes) -> bytes:
+        """
+        Normalizes EXIF orientation on input images.
+        Smartphone cameras encode orientation in EXIF tags (e.g. tag 0x0112 = 6 for 90 deg CW).
+        Physically transposes pixel grid to upright orientation and clears EXIF orientation
+        to prevent downstream neural models and Flutter viewers from rendering rotated images.
+        """
+        try:
+            pil_img = Image.open(io.BytesIO(image_bytes))
+            exif = pil_img.getexif()
+            if exif and 0x0112 in exif and exif[0x0112] != 1:
+                transposed = ImageOps.exif_transpose(pil_img)
+                buf = io.BytesIO()
+                fmt = pil_img.format or ("PNG" if transposed.mode == "RGBA" else "JPEG")
+                transposed.save(buf, format=fmt)
+                return buf.getvalue()
+        except Exception as e:
+            logger.debug(f"[Tool: Orientation] Normalization skipped: {e}")
+        return image_bytes
+
+    @staticmethod
+    def _preserve_object_integrity(cutout_img: Image.Image, orig_img: Image.Image) -> Image.Image:
+        """
+        Topological flood-fill object hole restoration.
+        Background removal models often falsely classify internal regions of an object
+        (e.g. white sneaker soles, laces, shirt patterns, glass, jewelry, reflections)
+        as background because their color matches the backdrop.
+        This algorithm identifies all enclosed interior holes within the object silhouette
+        and restores their original RGB pixels with solid alpha (255), guaranteeing
+        that NO part of the object is ever erased or eaten away.
+        """
+        try:
+            cutout_rgba = np.array(cutout_img.convert("RGBA"))
+            orig_rgb = np.array(orig_img.convert("RGB"))
+
+            # Ensure spatial dimensions match
+            if cutout_rgba.shape[:2] != orig_rgb.shape[:2]:
+                orig_rgb = cv2.resize(orig_rgb, (cutout_rgba.shape[1], cutout_rgba.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+
+            alpha = cutout_rgba[:, :, 3]
+            h, w = alpha.shape
+
+            # 1. Binarize alpha to find outer object boundary
+            binary_fg = (alpha > 30).astype(np.uint8) * 255
+
+            # 2. Pad by 2 pixels to allow floodfill around boundaries
+            padded = np.pad(binary_fg, 2, mode="constant", constant_values=0)
+            inv = cv2.bitwise_not(padded)
+
+            ff_mask = np.zeros((h + 6, w + 6), dtype=np.uint8)
+            filled = inv.copy()
+            cv2.floodFill(filled, ff_mask, (0, 0), 0)
+
+            # 'filled' now contains 255 ONLY at enclosed internal holes
+            internal_holes = filled[2:-2, 2:-2]
+
+            # 3. For any enclosed hole, restore original RGB pixels and set alpha to 255
+            hole_mask = (internal_holes > 128) & (alpha < 200)
+            if np.any(hole_mask):
+                cutout_rgba[hole_mask, :3] = orig_rgb[hole_mask]
+                cutout_rgba[hole_mask, 3] = 255
+                logger.info(f"[Tool: Background Removal] Restored {int(np.sum(hole_mask))} internal object pixels")
+
+            return Image.fromarray(cutout_rgba, mode="RGBA")
+        except Exception as e:
+            logger.warning(f"[Tool: Background Removal] Object integrity preservation skipped: {e}")
+            return cutout_img
 
     async def _resolve_job_image_url(self, image_id: Optional[str]) -> Optional[str]:
         if not image_id:
@@ -126,10 +200,12 @@ class ToolService:
             url = FALLBACK_TOOL_IMAGE
         if url.startswith("data:"):
             _, encoded = url.split(",", 1)
-            return base64.b64decode(encoded)
+            raw = base64.b64decode(encoded)
+            return self._normalize_image_orientation(raw)
         if not url.startswith("http://") and not url.startswith("https://"):
             try:
-                return base64.b64decode(url)
+                raw = base64.b64decode(url)
+                return self._normalize_image_orientation(raw)
             except Exception:
                 pass
         headers = {
@@ -140,7 +216,7 @@ class ToolService:
             async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as client:
                 resp = await client.get(url)
                 if resp.status_code == 200:
-                    return resp.content
+                    return self._normalize_image_orientation(resp.content)
                 logger.warning(f"[Tool: Image Fetch] HTTP {resp.status_code} for {url[:60]}")
         except Exception as dl_err:
             logger.warning(f"[Tool: Image Fetch] Download notice: {dl_err}. Trying fallback.")
@@ -150,7 +226,7 @@ class ToolService:
             async with httpx.AsyncClient(timeout=10.0, headers=headers, follow_redirects=True) as client:
                 resp = await client.get(FALLBACK_TOOL_IMAGE)
                 if resp.status_code == 200:
-                    return resp.content
+                    return self._normalize_image_orientation(resp.content)
         raise ValueError(f"Failed to fetch image from {url}")
 
     async def _upload_to_supabase(self, image_bytes: bytes, folder: str = "tool_edits", ext: str = "png") -> Optional[str]:
@@ -588,12 +664,23 @@ class ToolService:
             else:
                 input_bytes = await self._download_image_bytes(target_url)
 
-            # 1. Background removal cutout
+            # Ensure orientation is upright
+            input_bytes = self._normalize_image_orientation(input_bytes)
+            orig_pil = Image.open(io.BytesIO(input_bytes)).convert("RGB")
+
+            # 1. Background removal cutout with SOTA BiRefNet
             session = self._get_rembg_session()
             if session:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, session=session)
             else:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+
+            # 1b. Restore any internal holes so NO part of the object is removed
+            cutout_pil = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+            restored_cutout = self._preserve_object_integrity(cutout_pil, orig_pil)
+            buf = io.BytesIO()
+            restored_cutout.save(buf, format="PNG")
+            cutout_bytes = buf.getvalue()
 
             # 2. Composite on new backdrop
             output_bytes = await asyncio.to_thread(
@@ -635,7 +722,9 @@ class ToolService:
             )
 
     async def _expand_canvas_lama(self, input_bytes: bytes, target_ratio: str) -> bytes:
-        img = Image.open(io.BytesIO(input_bytes)).convert("RGB")
+        input_bytes = self._normalize_image_orientation(input_bytes)
+        img = Image.open(io.BytesIO(input_bytes))
+        img = ImageOps.exif_transpose(img).convert("RGB")
         w, h = img.size
 
         # Determine target aspect ratio dimensions
