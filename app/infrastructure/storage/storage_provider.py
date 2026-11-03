@@ -114,7 +114,7 @@ class SupabaseStorageProvider(IStorageProvider):
         try:
             admin = get_supabase_admin()
             # Extract relative path from public URL
-            clean_path = path_or_url.split("/storage/v1/object/public/user_generations/")[-1]
+            clean_path = path_or_url.split("/storage/v1/object/public/user_generations/")[-1].split("?")[0]
             await asyncio.to_thread(admin.storage.from_("user_generations").remove, [clean_path])
             return True
         except Exception as e:

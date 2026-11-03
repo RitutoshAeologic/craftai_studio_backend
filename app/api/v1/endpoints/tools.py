@@ -190,9 +190,11 @@ async def tool_history(
     """Retrieves tool generation history for the current user."""
     try:
         admin = get_supabase_admin()
-        query = admin.from_("jobs").select("*").order("created_at", { "ascending": False }).limit(limit)
+        query = admin.from_("jobs").select("*").order("created_at", desc=True).limit(limit).offset(offset)
         if user_id and user_id not in ("undefined", "null", "default", "guest"):
             query = query.eq("user_id", user_id)
+        if tool_type and tool_type not in ("all", "ALL", ""):
+            query = query.eq("tool_applied", tool_type)
         res = query.execute()
         return res.data or []
     except Exception as e:

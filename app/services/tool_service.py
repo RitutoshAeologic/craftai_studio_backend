@@ -6,7 +6,7 @@ import uuid
 import httpx
 import numpy as np
 import cv2
-from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageOps, ImageFont
 import rembg
 from typing import Optional, Tuple
 from app.infrastructure.clients.base import IDiffusionGateway
@@ -182,6 +182,25 @@ class ToolService:
             logger.warning(f"[Tool: Background Removal] Object integrity preservation skipped: {e}")
             return cutout_img
 
+    @staticmethod
+    def _get_font(size: int) -> ImageFont.ImageFont:
+        for font_name in [
+            "Helvetica.ttc",
+            "Arial.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/Library/Fonts/Arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "DejaVuSans.ttf",
+        ]:
+            try:
+                return ImageFont.truetype(font_name, size)
+            except Exception:
+                pass
+        try:
+            return ImageFont.load_default(size=size)
+        except Exception:
+            return ImageFont.load_default()
+
     async def _resolve_job_image_url(self, image_id: Optional[str]) -> Optional[str]:
         if not image_id:
             return None
@@ -289,13 +308,9 @@ class ToolService:
 
         try:
             if not effective_url and req.image_id:
-                try:
-                    admin = get_supabase_admin()
-                    res = admin.table("jobs").select("preview_url").eq("job_id", req.image_id).execute()
-                    if res.data and len(res.data) > 0 and res.data[0].get("preview_url"):
-                        effective_url = res.data[0]["preview_url"]
-                except Exception as e:
-                    logger.warning(f"[Tool: Preset Transform] Could not query jobs table: {e}")
+                resolved = await self._resolve_job_image_url(req.image_id)
+                if resolved:
+                    effective_url = resolved
 
             if not effective_url:
                 effective_url = FALLBACK_TOOL_IMAGE
@@ -351,7 +366,11 @@ class ToolService:
         target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
         try:
             logger.info(f"[Tool: Background Removal] Processing: {target_url[:80]}...")
-            input_bytes = await self._download_image_bytes(target_url)
+            if getattr(req, 'image_base64', None):
+                b64 = req.image_base64.split(",", 1)[-1] if "," in req.image_base64 else req.image_base64
+                input_bytes = self._normalize_image_orientation(base64.b64decode(b64))
+            else:
+                input_bytes = await self._download_image_bytes(target_url)
 
             output_bytes = await self.bg_remover_engine.remove_background(input_bytes)
 
@@ -435,20 +454,12 @@ class ToolService:
 
         try:
             if not effective_url and req.image_id:
-                try:
-                    admin = get_supabase_admin()
-                    res = admin.table("jobs").select("preview_url").eq("job_id", req.image_id).execute()
-                    if res.data and len(res.data) > 0 and res.data[0].get("preview_url"):
-                        effective_url = res.data[0]["preview_url"]
-                except Exception as e:
-                    logger.warning(f"[Tool: Upscale] Could not query jobs table: {e}")
+                resolved = await self._resolve_job_image_url(req.image_id)
+                if resolved:
+                    effective_url = resolved
 
             if not effective_url:
                 effective_url = FALLBACK_TOOL_IMAGE
-
-            resolved = await self._resolve_job_image_url(req.image_id)
-            if resolved:
-                effective_url = resolved
             input_bytes = await self._download_image_bytes(effective_url)
             output_bytes, orig_res, upscaled_res = await self.upscaler_engine.upscale(
                 input_bytes,
@@ -556,20 +567,43 @@ class ToolService:
         backdrop_str = (custom_backdrop or "").lower()
         combo = f"{mode_str} {backdrop_str}".strip()
 
+        # Calculate exact contact point using alpha bounding box
+        alpha = cutout.split()[-1]
+        bbox = alpha.getbbox()
+        if bbox:
+            min_x, min_y, max_x, max_y = bbox
+            base_y = max_y
+            cw = max(max_x - min_x, int(w * 0.1))
+            center_x = (min_x + max_x) // 2
+        else:
+            base_y = int(h * 0.88)
+            cw = int(w * 0.6)
+            center_x = w // 2
+
         # 1. Pure White Commercial E-Commerce Studio
         if "pure_white" in combo or (mode_str == "pure_white" and not custom_backdrop):
             bg = Image.new("RGBA", (w, h), (255, 255, 255, 255))
-            sy = int(h * 0.88)
-            # Soft ambient drop shadow
+            # Soft ambient drop shadow anchored to object bottom
             shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             draw = ImageDraw.Draw(shadow)
-            draw.ellipse([int(w * 0.15), sy - 20, int(w * 0.85), sy + 30], fill=(0, 0, 0, 45))
-            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=16))
-            # Sharp contact occlusion shadow under base
+            draw.ellipse([
+                center_x - int(cw * 0.55),
+                base_y - int(h * 0.025),
+                center_x + int(cw * 0.55),
+                base_y + int(h * 0.035)
+            ], fill=(0, 0, 0, 55))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=max(6, int(min(w, h) * 0.03))))
+            
+            # Sharp contact occlusion shadow under object base
             occlusion = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             o_draw = ImageDraw.Draw(occlusion)
-            o_draw.ellipse([int(w * 0.25), sy - 6, int(w * 0.75), sy + 8], fill=(0, 0, 0, 110))
-            occlusion = occlusion.filter(ImageFilter.GaussianBlur(radius=5))
+            o_draw.ellipse([
+                center_x - int(cw * 0.38),
+                base_y - int(h * 0.008),
+                center_x + int(cw * 0.38),
+                base_y + int(h * 0.012)
+            ], fill=(0, 0, 0, 140))
+            occlusion = occlusion.filter(ImageFilter.GaussianBlur(radius=4))
 
             bg = Image.alpha_composite(bg, shadow)
             bg = Image.alpha_composite(bg, occlusion)
@@ -590,19 +624,6 @@ class ToolService:
             bg_cropped = bg_resized.crop((left, top, left + w, top + h))
             # Gentle depth-of-field blur so product pops with DSLR portrait bokeh
             bg_composite = bg_cropped.filter(ImageFilter.GaussianBlur(radius=2.5))
-
-            # Calculate exact contact point using alpha bounding box
-            alpha = cutout.split()[-1]
-            bbox = alpha.getbbox()
-            if bbox:
-                min_x, min_y, max_x, max_y = bbox
-                base_y = max_y
-                cw = max_x - min_x
-                center_x = (min_x + max_x) // 2
-            else:
-                base_y = int(h * 0.88)
-                cw = int(w * 0.6)
-                center_x = w // 2
 
             # Soft diffuse ambient ground shadow
             shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -642,10 +663,14 @@ class ToolService:
         light = light.filter(ImageFilter.GaussianBlur(radius=int(min(w, h) * 0.16)))
         bg = Image.alpha_composite(bg, light)
         
-        sy = int(h * 0.86)
         shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         s_draw = ImageDraw.Draw(shadow)
-        s_draw.ellipse([int(w * 0.18), sy - 22, int(w * 0.82), sy + 30], fill=(0, 0, 0, 110))
+        s_draw.ellipse([
+            center_x - int(cw * 0.55),
+            base_y - int(h * 0.025),
+            center_x + int(cw * 0.55),
+            base_y + int(h * 0.035)
+        ], fill=(0, 0, 0, 110))
         shadow = shadow.filter(ImageFilter.GaussianBlur(radius=16))
         bg = Image.alpha_composite(bg, shadow)
         bg = Image.alpha_composite(bg, cutout)
@@ -741,7 +766,17 @@ class ToolService:
             "2:1": (2, 1),
             "1:2": (1, 2),
         }
-        rw, rh = ratio_map.get(target_ratio, (16, 9))
+        ratio_clean = (target_ratio or "16:9").strip()
+        if ratio_clean in ratio_map:
+            rw, rh = ratio_map[ratio_clean]
+        elif ":" in ratio_clean:
+            try:
+                parts = ratio_clean.split(":")
+                rw, rh = float(parts[0]), float(parts[1])
+            except Exception:
+                rw, rh = (16, 9)
+        else:
+            rw, rh = (16, 9)
         target_aspect = rw / rh
         current_aspect = w / h
 
@@ -859,7 +894,11 @@ class ToolService:
         target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
         try:
             logger.info(f"[Tool: AI Expand] Target Ratio: {req.target_ratio} | Processing: {target_url[:80]}...")
-            input_bytes = await self._download_image_bytes(target_url)
+            if getattr(req, 'image_base64', None):
+                b64 = req.image_base64.split(",", 1)[-1] if "," in req.image_base64 else req.image_base64
+                input_bytes = self._normalize_image_orientation(base64.b64decode(b64))
+            else:
+                input_bytes = await self._download_image_bytes(target_url)
 
             output_bytes = await self._expand_canvas_lama(
                 input_bytes,
@@ -947,6 +986,20 @@ class ToolService:
         prod_y = pedestal_top_y - ph + 15
         canvas.paste(scaled_product, (prod_x, prod_y), scaled_product)
 
+        # Commercial Product Title Header
+        header_draw = ImageDraw.Draw(canvas)
+        font_header = self._get_font(34)
+        font_sub = self._get_font(18)
+        title_text = (product_name or "COMMERCIAL SHOWCASE").upper()
+        h_bbox = header_draw.textbbox((0, 0), title_text, font=font_header)
+        title_w = h_bbox[2] - h_bbox[0]
+        header_draw.text(((canvas_w - title_w) // 2, 75), title_text, font=font_header, fill=(245, 245, 250, 235))
+        
+        sub_text = "PREMIUM COMMERCIAL STAGING • CRAFTAI STUDIO"
+        s_bbox = header_draw.textbbox((0, 0), sub_text, font=font_sub)
+        sub_w = s_bbox[2] - s_bbox[0]
+        header_draw.text(((canvas_w - sub_w) // 2, 125), sub_text, font=font_sub, fill=(148, 163, 184, 210))
+
         out_io = io.BytesIO()
         canvas.convert("RGB").save(out_io, format="PNG", optimize=True)
         return out_io.getvalue()
@@ -956,7 +1009,11 @@ class ToolService:
         target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
         try:
             logger.info(f"[Tool: Product Detail] Name: {req.product_name} | Processing: {target_url[:80]}...")
-            input_bytes = await self._download_image_bytes(target_url)
+            if getattr(req, 'image_base64', None):
+                b64 = req.image_base64.split(",", 1)[-1] if "," in req.image_base64 else req.image_base64
+                input_bytes = self._normalize_image_orientation(base64.b64decode(b64))
+            else:
+                input_bytes = await self._download_image_bytes(target_url)
             orig_pil = Image.open(io.BytesIO(input_bytes)).convert("RGB")
 
             # Background removal cutout
@@ -1029,14 +1086,22 @@ class ToolService:
         draw.rectangle([30, 30, canvas_w - 30, canvas_h - 30], outline=(99, 102, 241, 180), width=4)
         draw.rectangle([45, 45, canvas_w - 45, canvas_h - 45], outline=(255, 255, 255, 60), width=1)
 
-        # Category pill badge
-        draw.rounded_rectangle([70, 70, 300, 120], radius=8, fill=(99, 102, 241, 230))
-        draw.text((95, 82), (category or "PROMOTION").upper(), fill=(255, 255, 255, 255))
+        # Category pill badge with dynamic width and crisp typography
+        font_badge = self._get_font(26)
+        font_title = self._get_font(42)
+        font_sub = self._get_font(22)
+
+        badge_text = (category or "PROMOTION").upper()
+        b_bbox = draw.textbbox((0, 0), badge_text, font=font_badge)
+        badge_w = max(b_bbox[2] - b_bbox[0] + 56, 180)
+        draw.rounded_rectangle([70, 70, 70 + badge_w, 134], radius=12, fill=(99, 102, 241, 235))
+        draw.text((98, 86), badge_text, font=font_badge, fill=(255, 255, 255, 255))
 
         # Bottom banner box
-        draw.rounded_rectangle([60, canvas_h - 220, canvas_w - 60, canvas_h - 60], radius=16, fill=(24, 24, 32, 235), outline=(255, 255, 255, 40))
-        draw.text((90, canvas_h - 185), (topic or "SPECIAL CAMPAIGN").upper(), fill=(255, 255, 255, 255))
-        draw.text((90, canvas_h - 130), "EXCLUSIVE OFFER • LIMITED EDITION • CRAFTAI STUDIO", fill=(161, 161, 170, 255))
+        draw.rounded_rectangle([60, canvas_h - 230, canvas_w - 60, canvas_h - 55], radius=18, fill=(18, 18, 24, 240), outline=(255, 255, 255, 45))
+        title_text = (topic or "SPECIAL CAMPAIGN").upper()
+        draw.text((92, canvas_h - 195), title_text, font=font_title, fill=(255, 255, 255, 255))
+        draw.text((92, canvas_h - 120), "EXCLUSIVE OFFER • LIMITED EDITION • CRAFTAI STUDIO", font=font_sub, fill=(161, 161, 170, 255))
 
         out_io = io.BytesIO()
         canvas.convert("RGB").save(out_io, format="JPEG", quality=95, optimize=True)
@@ -1048,7 +1113,13 @@ class ToolService:
         try:
             logger.info(f"[Tool: Marketing Poster] Topic: {req.topic} | Category: {req.category}...")
             input_bytes = None
-            if target_url:
+            if getattr(req, 'image_base64', None):
+                try:
+                    b64 = req.image_base64.split(",", 1)[-1] if "," in req.image_base64 else req.image_base64
+                    input_bytes = self._normalize_image_orientation(base64.b64decode(b64))
+                except Exception:
+                    pass
+            elif target_url:
                 try:
                     input_bytes = await self._download_image_bytes(target_url)
                 except Exception:
