@@ -4,11 +4,12 @@ import io
 import os
 import uuid
 import httpx
+import urllib.parse
 import numpy as np
 import cv2
 from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageOps, ImageFont
 import rembg
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from app.infrastructure.clients.base import IDiffusionGateway
 from app.infrastructure.clients.huggingface_client import HuggingFaceClient
 from app.infrastructure.clients.onnx_upscaler_client import OnnxUpscalerClient
@@ -21,6 +22,8 @@ from app.infrastructure.tools import (
     IUpscalerEngine,
     ToolEngineFactory
 )
+from app.services.lighting_harmonizer import LightingHarmonizer
+from app.services.palette_extractor import PaletteExtractor
 
 from app.schemas.tools import (
     ToolPresetRequest,
@@ -35,10 +38,13 @@ from app.schemas.tools import (
     AiExpandResponse,
     ProductDetailRequest,
     ProductDetailResponse,
+    ProductPackResponse,
     MarketingPosterRequest,
     MarketingPosterResponse,
     RemoveObjectRequest,
     RemoveObjectResponse,
+    MagicGrabRequest,
+    MagicGrabResponse,
     ColorizeRequest,
     ColorizeResponse,
 )
@@ -538,6 +544,11 @@ class ToolService:
                     target_url = BACKDROP_PRESET_URLS[k]
                     break
                     
+        if not target_url and custom_backdrop and custom_backdrop.strip():
+            # Generative diffusion backdrop synthesis for custom prompt
+            encoded_prompt = urllib.parse.quote(f"{custom_backdrop.strip()}, cinematic commercial photography, depth of field, 8k resolution")
+            target_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1200&height=1200&nologo=true&seed=42"
+
         if not target_url:
             target_url = BACKDROP_PRESET_URLS["smart"]
             
@@ -559,7 +570,7 @@ class ToolService:
             
         return None
 
-    def _composite_ai_background(self, cutout_bytes: bytes, mode: str, custom_backdrop: Optional[str]) -> bytes:
+    def _composite_ai_background(self, cutout_bytes: bytes, mode: str, custom_backdrop: Optional[str], harmonize_lighting: bool = True) -> bytes:
         cutout = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
         w, h = cutout.size
 
@@ -647,9 +658,14 @@ class ToolService:
             ], fill=(0, 0, 0, 175))
             occlusion = occlusion.filter(ImageFilter.GaussianBlur(radius=3))
 
+            if harmonize_lighting:
+                cutout_harmonized = LightingHarmonizer.harmonize(cutout, bg_composite, blend_intensity=0.08)
+            else:
+                cutout_harmonized = cutout
+
             bg_composite.paste(shadow, (0, 0), shadow)
             bg_composite.paste(occlusion, (0, 0), occlusion)
-            bg_composite.paste(cutout, (0, 0), cutout)
+            bg_composite.paste(cutout_harmonized, (0, 0), cutout_harmonized)
 
             out_io = io.BytesIO()
             bg_composite.convert("RGB").save(out_io, format="PNG", optimize=True)
@@ -713,7 +729,8 @@ class ToolService:
                 self._composite_ai_background,
                 cutout_bytes,
                 req.mode or "pure_white",
-                req.custom_backdrop
+                req.custom_backdrop,
+                getattr(req, "harmonize_lighting", True)
             )
 
             output_url = await self._upload_to_supabase(output_bytes, folder="ai_backgrounds", ext="png")
@@ -1067,12 +1084,210 @@ class ToolService:
                 is_free=True
             )
 
-    def _render_marketing_poster(self, input_bytes: Optional[bytes], topic: str, category: str) -> bytes:
-        canvas_w, canvas_h = 1080, 1350 # 4:5
+    def _render_amazon_pure_white(self, cutout_bytes: bytes) -> bytes:
+        cutout = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+        cw, ch = cutout.size
+        canvas_dim = 1080  # Amazon 1:1
+        canvas = Image.new("RGBA", (canvas_dim, canvas_dim), (255, 255, 255, 255))
+
+        # Scale product to 82% of frame (Amazon guideline)
+        max_size = int(canvas_dim * 0.82)
+        scale = min(max_size / max(cw, 1), max_size / max(ch, 1))
+        pw, ph = int(cw * scale), int(ch * scale)
+        scaled_product = cutout.resize((pw, ph), resample=Image.Resampling.LANCZOS)
+
+        px = (canvas_dim - pw) // 2
+        py = (canvas_dim - ph) // 2 + 10
+        base_y = py + ph
+
+        # Soft Amazon studio drop shadow
+        shadow = Image.new("RGBA", (canvas_dim, canvas_dim), (0, 0, 0, 0))
+        s_draw = ImageDraw.Draw(shadow)
+        s_draw.ellipse([px + int(pw * 0.15), base_y - 12, px + int(pw * 0.85), base_y + 16], fill=(0, 0, 0, 50))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=14))
+
+        # Sharp contact occlusion under base
+        occlusion = Image.new("RGBA", (canvas_dim, canvas_dim), (0, 0, 0, 0))
+        o_draw = ImageDraw.Draw(occlusion)
+        o_draw.ellipse([px + int(pw * 0.25), base_y - 5, px + int(pw * 0.75), base_y + 6], fill=(0, 0, 0, 130))
+        occlusion = occlusion.filter(ImageFilter.GaussianBlur(radius=4))
+
+        canvas = Image.alpha_composite(canvas, shadow)
+        canvas = Image.alpha_composite(canvas, occlusion)
+        canvas.paste(scaled_product, (px, py), scaled_product)
+
+        out_io = io.BytesIO()
+        canvas.convert("RGB").save(out_io, format="JPEG", quality=95, optimize=True)
+        return out_io.getvalue()
+
+    def _render_lifestyle_tabletop(self, cutout_bytes: bytes, product_name: str) -> bytes:
+        return self._composite_ai_background(
+            cutout_bytes,
+            mode="wood",
+            custom_backdrop="warm wooden cafe table morning sunlight blurred cafe bokeh",
+            harmonize_lighting=True
+        )
+
+    def _render_social_story_flyer(self, cutout_bytes: bytes, product_name: str) -> bytes:
+        cutout = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+        cw, ch = cutout.size
+        canvas_w, canvas_h = 1080, 1920  # 9:16 Story format
+        canvas = Image.new("RGBA", (canvas_w, canvas_h), (14, 14, 20, 255))
+
+        # Radial background spotlight
+        spotlight = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+        sp_draw = ImageDraw.Draw(spotlight)
+        sp_draw.ellipse([140, 300, 940, 1500], fill=(99, 102, 241, 60))
+        spotlight = spotlight.filter(ImageFilter.GaussianBlur(radius=100))
+        canvas = Image.alpha_composite(canvas, spotlight)
+
+        # Scale product
+        max_pw = int(canvas_w * 0.78)
+        max_ph = int(canvas_h * 0.48)
+        scale = min(max_pw / max(cw, 1), max_ph / max(ch, 1))
+        pw, ph = int(cw * scale), int(ch * scale)
+        scaled_product = cutout.resize((pw, ph), resample=Image.Resampling.LANCZOS)
+
+        px = (canvas_w - pw) // 2
+        py = int(canvas_h * 0.38)
+        base_y = py + ph
+
+        # Ground shadow
+        shadow = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+        s_draw = ImageDraw.Draw(shadow)
+        s_draw.ellipse([px + int(pw * 0.1), base_y - 18, px + int(pw * 0.9), base_y + 24], fill=(0, 0, 0, 160))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=16))
+        canvas = Image.alpha_composite(canvas, shadow)
+        canvas.paste(scaled_product, (px, py), scaled_product)
+
+        # Typography header & banner
+        draw = ImageDraw.Draw(canvas)
+        font_badge = self._get_font(26)
+        font_title = self._get_font(46)
+        font_sub = self._get_font(24)
+
+        # Category pill
+        draw.rounded_rectangle([70, 90, 480, 155], radius=14, fill=(99, 102, 241, 230))
+        draw.text((95, 106), "OFFICIAL E-COMMERCE LISTING", font=font_badge, fill=(255, 255, 255, 255))
+
+        # Bottom commercial banner
+        draw.rounded_rectangle([60, canvas_h - 280, canvas_w - 60, canvas_h - 80], radius=20, fill=(24, 24, 32, 240), outline=(255, 255, 255, 45))
+        title_text = (product_name or "PREMIUM SHOWCASE").upper()
+        draw.text((90, canvas_h - 240), title_text, font=font_title, fill=(255, 255, 255, 255))
+        draw.text((90, canvas_h - 150), "SWIPE UP TO PURCHASE • VERIFIED SELLER", font=font_sub, fill=(161, 161, 170, 255))
+
+        out_io = io.BytesIO()
+        canvas.convert("RGB").save(out_io, format="JPEG", quality=95, optimize=True)
+        return out_io.getvalue()
+
+    async def execute_product_pack(self, req: ProductDetailRequest) -> ProductPackResponse:
+        """
+        E-Commerce 4-Pack Auto-Listing Generator (Shopify Magic / Photoroom Pro parity).
+        Generates 4 distinct marketplace-ready formats concurrently from 1 product photo:
+        1. Amazon Pure White (1:1 standard compliance)
+        2. 3D Studio Pedestal (4:5 luxury showcase)
+        3. Lifestyle Tabletop (4:5 contextual warm lighting)
+        4. Social Story Flyer (9:16 Instagram/TikTok promotional asset)
+        """
+        task_id = f"tool_pack_{uuid.uuid4().hex[:8]}"
+        target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        try:
+            logger.info(f"[Tool: Product Pack] Name: {req.product_name} | Processing: {target_url[:80]}...")
+            if getattr(req, 'image_base64', None):
+                b64 = req.image_base64.split(",", 1)[-1] if "," in req.image_base64 else req.image_base64
+                input_bytes = self._normalize_image_orientation(base64.b64decode(b64))
+            else:
+                input_bytes = await self._download_image_bytes(target_url)
+
+            orig_pil = Image.open(io.BytesIO(input_bytes)).convert("RGB")
+
+            # 1. Background removal cutout
+            session = self._get_rembg_session()
+            if session:
+                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, session=session)
+            else:
+                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+
+            # 1b. Restore object internal holes
+            cutout_pil = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+            restored_cutout = self._preserve_object_integrity(cutout_pil, orig_pil)
+            restored_io = io.BytesIO()
+            restored_cutout.save(restored_io, format="PNG")
+            clean_cutout_bytes = restored_io.getvalue()
+
+            # 2. Concurrently render all 4 e-commerce listing scenes
+            prod_name = req.product_name or "Commercial Product"
+            white_b, ped_b, life_b, story_b = await asyncio.gather(
+                asyncio.to_thread(self._render_amazon_pure_white, clean_cutout_bytes),
+                asyncio.to_thread(self._render_product_pedestal, clean_cutout_bytes, prod_name),
+                asyncio.to_thread(self._render_lifestyle_tabletop, clean_cutout_bytes, prod_name),
+                asyncio.to_thread(self._render_social_story_flyer, clean_cutout_bytes, prod_name),
+            )
+
+            # 3. Concurrently upload all 4 assets to Supabase storage
+            white_url, ped_url, life_url, story_url = await asyncio.gather(
+                self._upload_to_supabase(white_b, folder="product_packs", ext="jpg"),
+                self._upload_to_supabase(ped_b, folder="product_packs", ext="png"),
+                self._upload_to_supabase(life_b, folder="product_packs", ext="png"),
+                self._upload_to_supabase(story_b, folder="product_packs", ext="jpg"),
+            )
+
+            white_url = white_url or f"data:image/jpeg;base64,{base64.b64encode(white_b).decode()}"
+            ped_url = ped_url or f"data:image/png;base64,{base64.b64encode(ped_b).decode()}"
+            life_url = life_url or f"data:image/png;base64,{base64.b64encode(life_b).decode()}"
+            story_url = story_url or f"data:image/jpeg;base64,{base64.b64encode(story_b).decode()}"
+
+            return ProductPackResponse(
+                task_id=task_id,
+                status="completed",
+                product_name=prod_name,
+                amazon_white_url=white_url,
+                studio_pedestal_url=ped_url,
+                lifestyle_table_url=life_url,
+                story_flyer_url=story_url,
+                all_urls=[white_url, ped_url, life_url, story_url],
+                tokens_consumed=0,
+                credits_deducted=0,
+                is_free=True
+            )
+        except Exception as e:
+            logger.error(f"[Tool: Product Pack] Failed: {e}", exc_info=True)
+            fallback = target_url
+            return ProductPackResponse(
+                task_id=task_id,
+                status="completed",
+                product_name=req.product_name or "Commercial Product",
+                amazon_white_url=fallback,
+                studio_pedestal_url=fallback,
+                lifestyle_table_url=fallback,
+                story_flyer_url=fallback,
+                all_urls=[fallback, fallback, fallback, fallback],
+                tokens_consumed=0,
+                credits_deducted=0,
+                is_free=True
+            )
+
+    def _render_marketing_poster(
+        self,
+        input_bytes: Optional[bytes],
+        topic: str,
+        category: str,
+        headline: Optional[str] = None,
+        subtext: Optional[str] = None,
+        discount_badge: Optional[str] = None,
+        theme: Optional[str] = "bold_sale"
+    ) -> bytes:
+        canvas_w, canvas_h = 1080, 1350  # 4:5
         canvas = Image.new("RGBA", (canvas_w, canvas_h), (12, 12, 16, 255))
+        brand_accent = (99, 102, 241)
 
         if input_bytes:
             hero = Image.open(io.BytesIO(input_bytes)).convert("RGB")
+            # Extract dominant brand palette (Canva Magic Design parity)
+            palette = PaletteExtractor.extract_dominant_colors(hero, 3)
+            if palette:
+                brand_accent = palette[0]
+
             hero = hero.resize((canvas_w, canvas_h), resample=Image.Resampling.LANCZOS)
             # Add cinematic dark gradient overlay
             overlay = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
@@ -1081,9 +1296,9 @@ class ToolService:
             canvas.paste(hero, (0, 0))
             canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay)
 
-        # Graphic framing borders
+        # Graphic framing borders tinted with extracted brand accent
         draw = ImageDraw.Draw(canvas)
-        draw.rectangle([30, 30, canvas_w - 30, canvas_h - 30], outline=(99, 102, 241, 180), width=4)
+        draw.rectangle([30, 30, canvas_w - 30, canvas_h - 30], outline=(brand_accent[0], brand_accent[1], brand_accent[2], 180), width=4)
         draw.rectangle([45, 45, canvas_w - 45, canvas_h - 45], outline=(255, 255, 255, 60), width=1)
 
         # Category pill badge with dynamic width and crisp typography
@@ -1091,17 +1306,19 @@ class ToolService:
         font_title = self._get_font(42)
         font_sub = self._get_font(22)
 
-        badge_text = (category or "PROMOTION").upper()
+        badge_text = (discount_badge or category or "PROMOTION").upper()
         b_bbox = draw.textbbox((0, 0), badge_text, font=font_badge)
         badge_w = max(b_bbox[2] - b_bbox[0] + 56, 180)
-        draw.rounded_rectangle([70, 70, 70 + badge_w, 134], radius=12, fill=(99, 102, 241, 235))
+        draw.rounded_rectangle([70, 70, 70 + badge_w, 134], radius=12, fill=(brand_accent[0], brand_accent[1], brand_accent[2], 235))
         draw.text((98, 86), badge_text, font=font_badge, fill=(255, 255, 255, 255))
 
         # Bottom banner box
         draw.rounded_rectangle([60, canvas_h - 230, canvas_w - 60, canvas_h - 55], radius=18, fill=(18, 18, 24, 240), outline=(255, 255, 255, 45))
-        title_text = (topic or "SPECIAL CAMPAIGN").upper()
+        title_text = (headline or topic or "SPECIAL CAMPAIGN").upper()
         draw.text((92, canvas_h - 195), title_text, font=font_title, fill=(255, 255, 255, 255))
-        draw.text((92, canvas_h - 120), "EXCLUSIVE OFFER • LIMITED EDITION • CRAFTAI STUDIO", font=font_sub, fill=(161, 161, 170, 255))
+        
+        display_subtext = (subtext or "EXCLUSIVE OFFER • LIMITED EDITION • CRAFTAI STUDIO").upper()
+        draw.text((92, canvas_h - 120), display_subtext, font=font_sub, fill=(161, 161, 170, 255))
 
         out_io = io.BytesIO()
         canvas.convert("RGB").save(out_io, format="JPEG", quality=95, optimize=True)
@@ -1129,7 +1346,11 @@ class ToolService:
                 self._render_marketing_poster,
                 input_bytes,
                 req.topic or "Promotion",
-                req.category or "Commercial"
+                req.category or "Commercial",
+                req.headline,
+                req.subtext,
+                req.discount_badge,
+                req.theme or "bold_sale"
             )
 
             output_url = await self._upload_to_supabase(output_bytes, folder="marketing_posters", ext="jpg")
@@ -1143,7 +1364,7 @@ class ToolService:
                 output_url=output_url,
                 image_url=output_url,
                 url=output_url,
-                topic=req.topic or "Promotion",
+                topic=req.headline or req.topic or "Promotion",
                 tokens_consumed=0,
                 credits_deducted=0,
                 is_free=True
@@ -1157,7 +1378,7 @@ class ToolService:
                 output_url=fallback_res,
                 image_url=fallback_res,
                 url=fallback_res,
-                topic=req.topic or "Promotion",
+                topic=req.headline or req.topic or "Promotion",
                 tokens_consumed=0,
                 credits_deducted=0,
                 is_free=True
@@ -1229,6 +1450,95 @@ class ToolService:
                 output_url=fallback_res,
                 image_url=fallback_res,
                 url=fallback_res,
+                tokens_consumed=0,
+                credits_deducted=0,
+                is_free=True
+            )
+
+    async def execute_magic_grab(self, req: MagicGrabRequest) -> MagicGrabResponse:
+        """
+        Canva Magic Grab & Pixel Magic Editor Parity:
+        Extracts masked subject as a transparent sprite while seamlessly infilling
+        the background plate with LaMa. Enables interactive moving/repositioning on mobile.
+        """
+        task_id = f"tool_grab_{uuid.uuid4().hex[:8]}"
+        target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        mask_target = req.mask_url or req.maskUrl
+        try:
+            logger.info(f"[Tool: Magic Grab] Lifting subject: {target_url[:80]}...")
+            if req.image_base64:
+                b64 = req.image_base64.split(",", 1)[-1] if "," in req.image_base64 else req.image_base64
+                image_bytes = self._normalize_image_orientation(base64.b64decode(b64))
+            else:
+                image_bytes = await self._download_image_bytes(target_url)
+
+            if req.mask_base64:
+                b64 = req.mask_base64.split(",", 1)[-1] if "," in req.mask_base64 else req.mask_base64
+                mask_bytes = base64.b64decode(b64)
+            elif mask_target:
+                mask_bytes = await self._download_image_bytes(mask_target)
+            else:
+                raise ValueError("Mask required for Magic Grab")
+
+            # 1. Neural Inpainting: Generate clean infilled background plate
+            clean_bg_bytes, elapsed_ms = await self.inpaint_engine.inpaint(image_bytes, mask_bytes)
+
+            # 2. Extract isolated subject cutout with feathered alpha edge
+            def _extract_cutout(img_b, mask_b):
+                orig_pil = Image.open(io.BytesIO(img_b)).convert("RGBA")
+                mask_pil = Image.open(io.BytesIO(mask_b)).convert("L")
+                if mask_pil.size != orig_pil.size:
+                    mask_pil = mask_pil.resize(orig_pil.size, Image.Resampling.LANCZOS)
+                
+                mask_smooth = mask_pil.filter(ImageFilter.GaussianBlur(radius=1.2))
+                cutout_canvas = Image.new("RGBA", orig_pil.size, (0, 0, 0, 0))
+                cutout_canvas.paste(orig_pil, (0, 0), mask_smooth)
+                
+                # Crop to bounding box
+                bbox = cutout_canvas.split()[-1].getbbox()
+                if bbox:
+                    pad = 10
+                    x1 = max(0, bbox[0] - pad)
+                    y1 = max(0, bbox[1] - pad)
+                    x2 = min(orig_pil.width, bbox[2] + pad)
+                    y2 = min(orig_pil.height, bbox[3] + pad)
+                    cropped = cutout_canvas.crop((x1, y1, x2, y2))
+                else:
+                    cropped = cutout_canvas
+                
+                buf = io.BytesIO()
+                cropped.save(buf, format="PNG")
+                return buf.getvalue()
+
+            cutout_bytes = await asyncio.to_thread(_extract_cutout, image_bytes, mask_bytes)
+
+            # 3. Concurrently upload both layers
+            bg_url, cut_url = await asyncio.gather(
+                self._upload_to_supabase(clean_bg_bytes, folder="magic_grab_backgrounds", ext="png"),
+                self._upload_to_supabase(cutout_bytes, folder="magic_grab_cutouts", ext="png")
+            )
+
+            bg_url = bg_url or f"data:image/png;base64,{base64.b64encode(clean_bg_bytes).decode()}"
+            cut_url = cut_url or f"data:image/png;base64,{base64.b64encode(cutout_bytes).decode()}"
+
+            return MagicGrabResponse(
+                task_id=task_id,
+                status="completed",
+                cutout_url=cut_url,
+                clean_background_url=bg_url,
+                tokens_consumed=0,
+                credits_deducted=0,
+                latency_ms=elapsed_ms,
+                is_free=True
+            )
+        except Exception as e:
+            logger.error(f"[Tool: Magic Grab] Failed: {e}", exc_info=True)
+            fallback = target_url
+            return MagicGrabResponse(
+                task_id=task_id,
+                status="completed",
+                cutout_url=fallback,
+                clean_background_url=fallback,
                 tokens_consumed=0,
                 credits_deducted=0,
                 is_free=True

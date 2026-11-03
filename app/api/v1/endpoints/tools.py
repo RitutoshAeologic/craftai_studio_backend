@@ -15,10 +15,13 @@ from app.schemas.tools import (
     AiExpandResponse,
     ProductDetailRequest,
     ProductDetailResponse,
+    ProductPackResponse,
     MarketingPosterRequest,
     MarketingPosterResponse,
     RemoveObjectRequest,
     RemoveObjectResponse,
+    MagicGrabRequest,
+    MagicGrabResponse,
     ColorizeRequest,
     ColorizeResponse,
 )
@@ -149,6 +152,17 @@ async def tool_product_detail(
     """E-commerce product isolation on luxury studio pedestal."""
     return await service.execute_product_detail(req)
 
+@router.post("/tools/product-pack", response_model=ProductPackResponse)
+async def tool_product_pack(
+    req: ProductDetailRequest,
+    service: ToolService = Depends(get_tool_service)
+):
+    """
+    E-Commerce 4-Pack Auto-Listing Generator (Shopify Magic / Photoroom Pro parity).
+    1-Tap converts 1 product photo into 4 commercial marketplace listing formats.
+    """
+    return await service.execute_product_pack(req)
+
 @router.post("/tools/marketing-poster", response_model=MarketingPosterResponse)
 async def tool_marketing_poster(
     req: MarketingPosterRequest,
@@ -168,6 +182,17 @@ async def tool_remove_object(
     Erase unwanted people, wires, text, or objects seamlessly in sub-second.
     """
     return await service.remove_object(req)
+
+@router.post("/tools/magic-grab", response_model=MagicGrabResponse)
+async def tool_magic_grab(
+    req: MagicGrabRequest,
+    service: ToolService = Depends(get_tool_service)
+):
+    """
+    Canva Magic Grab & Pixel Magic Editor Parity:
+    Lifts selected object into a moveable cutout and infills background with LaMa.
+    """
+    return await service.execute_magic_grab(req)
 
 @router.post("/tools/colorize", response_model=ColorizeResponse)
 async def tool_colorize(

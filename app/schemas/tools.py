@@ -1,4 +1,4 @@
-from typing import Optional, Any
+from typing import Optional, Any, List
 from pydantic import BaseModel, Field, model_validator
 
 class ToolPresetRequest(BaseModel):
@@ -116,6 +116,7 @@ class AiBackgroundRequest(BaseModel):
     aspect_ratio: Optional[str] = "1:1"
     aspectRatio: Optional[str] = None
     quality: Optional[str] = "1k"
+    harmonize_lighting: Optional[bool] = True
     user_id: Optional[str] = None
     userId: Optional[str] = None
 
@@ -227,6 +228,9 @@ class MarketingPosterRequest(BaseModel):
     aspect_ratio: Optional[str] = "4:5"
     aspectRatio: Optional[str] = None
     headline: Optional[str] = None
+    subtext: Optional[str] = None
+    discount_badge: Optional[str] = None
+    theme: Optional[str] = "bold_sale"
     language: Optional[str] = "Auto"
     quality: Optional[str] = "1k"
     user_id: Optional[str] = None
@@ -242,6 +246,8 @@ class MarketingPosterRequest(BaseModel):
             ratio = data.get("aspect_ratio") or data.get("aspectRatio")
             if ratio:
                 data["aspect_ratio"] = ratio
+            if data.get("discount"):
+                data["discount_badge"] = data.get("discount")
         return data
 
 class MarketingPosterResponse(BaseModel):
@@ -330,6 +336,62 @@ class ColorizeResponse(BaseModel):
     output_url: str
     image_url: str = Field(default="", description="Alias to output_url")
     url: str = Field(default="", description="Alias to output_url")
+    tokens_consumed: int = 0
+    credits_deducted: int = 0
+    latency_ms: Optional[float] = None
+    is_free: bool = True
+
+class ProductPackResponse(BaseModel):
+    task_id: str
+    status: str = "completed"
+    product_name: str = "Commercial Product"
+    amazon_white_url: str
+    studio_pedestal_url: str
+    lifestyle_table_url: str
+    story_flyer_url: str
+    all_urls: List[str] = Field(default_factory=list)
+    tokens_consumed: int = 0
+    credits_deducted: int = 0
+    is_free: bool = True
+
+class MagicGrabRequest(BaseModel):
+    image_url: Optional[str] = Field(default=None, description="Image URL or Base64 data URL")
+    imageUrl: Optional[str] = None
+    mask_url: Optional[str] = Field(default=None, description="Mask URL or Base64 data URL")
+    maskUrl: Optional[str] = None
+    image_base64: Optional[str] = None
+    imageBase64: Optional[str] = None
+    mask_base64: Optional[str] = None
+    maskBase64: Optional[str] = None
+    user_id: Optional[str] = None
+    userId: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            url = data.get("image_url") or data.get("imageUrl") or data.get("url")
+            if url:
+                data["image_url"] = url
+            mask = data.get("mask_url") or data.get("maskUrl") or data.get("mask")
+            if mask:
+                data["mask_url"] = mask
+            img_b64 = data.get("image_base64") or data.get("imageBase64")
+            if img_b64:
+                data["image_base64"] = img_b64
+            mask_b64 = data.get("mask_base64") or data.get("maskBase64")
+            if mask_b64:
+                data["mask_base64"] = mask_b64
+            uid = data.get("user_id") or data.get("userId")
+            if uid:
+                data["user_id"] = uid
+        return data
+
+class MagicGrabResponse(BaseModel):
+    task_id: str
+    status: str = "completed"
+    cutout_url: str
+    clean_background_url: str
     tokens_consumed: int = 0
     credits_deducted: int = 0
     latency_ms: Optional[float] = None
