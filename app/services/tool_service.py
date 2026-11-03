@@ -393,6 +393,7 @@ class ToolService:
             )
 
     def _upscale_image_cpu(self, input_bytes: bytes, scale: int, mode: str) -> tuple:
+        input_bytes = self._normalize_image_orientation(input_bytes)
         img = Image.open(io.BytesIO(input_bytes)).convert("RGB")
         orig_w, orig_h = img.size
         original_res = f"{orig_w}x{orig_h}"
@@ -956,6 +957,7 @@ class ToolService:
         try:
             logger.info(f"[Tool: Product Detail] Name: {req.product_name} | Processing: {target_url[:80]}...")
             input_bytes = await self._download_image_bytes(target_url)
+            orig_pil = Image.open(io.BytesIO(input_bytes)).convert("RGB")
 
             # Background removal cutout
             session = self._get_rembg_session()
@@ -963,6 +965,13 @@ class ToolService:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, session=session)
             else:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+
+            # Restore internal holes so no product details are erased
+            cutout_pil = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+            restored_cutout = self._preserve_object_integrity(cutout_pil, orig_pil)
+            restored_io = io.BytesIO()
+            restored_cutout.save(restored_io, format="PNG")
+            cutout_bytes = restored_io.getvalue()
 
             output_bytes = await asyncio.to_thread(
                 self._render_product_pedestal,
@@ -1091,7 +1100,7 @@ class ToolService:
             logger.info(f"[Tool: Object Eraser] Inpainting target: {target_url[:80]}...")
             if req.image_base64:
                 b64 = req.image_base64.split(",", 1)[-1] if "," in req.image_base64 else req.image_base64
-                image_bytes = base64.b64decode(b64)
+                image_bytes = self._normalize_image_orientation(base64.b64decode(b64))
             else:
                 image_bytes = await self._download_image_bytes(target_url)
 
@@ -1161,7 +1170,7 @@ class ToolService:
             logger.info(f"[Tool: Colorize] Restoring color for: {target_url[:80]}...")
             if req.image_base64:
                 b64 = req.image_base64.split(",", 1)[-1] if "," in req.image_base64 else req.image_base64
-                image_bytes = base64.b64decode(b64)
+                image_bytes = self._normalize_image_orientation(base64.b64decode(b64))
             else:
                 image_bytes = await self._download_image_bytes(target_url)
 
