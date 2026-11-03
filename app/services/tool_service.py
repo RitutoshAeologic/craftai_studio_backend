@@ -10,7 +10,8 @@ import cv2
 from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageOps, ImageFont
 import rembg
 from typing import Optional, Tuple, List
-from app.infrastructure.clients.base import IDiffusionGateway
+from app.infrastructure.clients.base import IDiffusionGateway, IVisionClient
+from app.infrastructure.clients.vision_factory import VisionClientFactory
 from app.infrastructure.clients.huggingface_client import HuggingFaceClient
 from app.infrastructure.clients.onnx_upscaler_client import OnnxUpscalerClient
 from app.infrastructure.storage.task_store import ITaskStore
@@ -88,6 +89,7 @@ class ToolService:
         bg_remover_engine: Optional[IBackgroundRemoverEngine] = None,
         upscaler_engine: Optional[IUpscalerEngine] = None,
         storage_provider: Optional[IStorageProvider] = None,
+        vision_client: Optional[IVisionClient] = None,
         **kwargs
     ):
         self.diffusion_gateway = diffusion_gateway
@@ -99,6 +101,7 @@ class ToolService:
         self.bg_remover_engine = bg_remover_engine or ToolEngineFactory.get_bg_remover_engine()
         self.upscaler_engine = upscaler_engine or ToolEngineFactory.get_upscaler_engine()
         self.storage_provider = storage_provider or StorageFactory.get_storage_provider()
+        self.vision_client = vision_client or VisionClientFactory.get_vision_client()
         self._rembg_session = None
 
     def _get_rembg_session(self):
@@ -764,13 +767,238 @@ class ToolService:
                 is_free=True
             )
 
+    def _compute_alignment_offsets(
+        self,
+        w: int, h: int,
+        new_w: int, new_h: int,
+        alignment: str,
+        salient_bbox: Optional[Tuple[int, int, int, int]] = None
+    ) -> Tuple[int, int]:
+        """
+        Calculates precise (paste_x, paste_y) coordinates based on alignment
+        mode (auto, center, left, right, top, bottom) and salient bounding box.
+        """
+        align = (alignment or "auto").lower().strip()
+        paste_x = max(0, (new_w - w) // 2)
+        paste_y = max(0, (new_h - h) // 2)
+
+        if align == "left":
+            paste_x = 0
+        elif align == "right":
+            paste_x = max(0, new_w - w)
+        elif align == "top":
+            paste_y = 0
+        elif align == "bottom":
+            paste_y = max(0, new_h - h)
+        elif align == "center":
+            paste_x = max(0, (new_w - w) // 2)
+            paste_y = max(0, (new_h - h) // 2)
+        elif align == "auto" and salient_bbox is not None:
+            min_x, min_y, max_x, max_y = salient_bbox
+            # If subject contacts or is anchored to ground (>85% of image height)
+            if max_y >= int(h * 0.85):
+                paste_y = max(0, new_h - h)
+            elif min_y <= int(h * 0.15):
+                paste_y = 0
+
+            # Horizontal anchoring
+            if min_x <= int(w * 0.12) and max_x < int(w * 0.80):
+                paste_x = 0
+            elif max_x >= int(w * 0.88) and min_x > int(w * 0.20):
+                paste_x = max(0, new_w - w)
+
+        return paste_x, paste_y
+
+    async def _detect_salient_bbox(self, img: Image.Image) -> Optional[Tuple[int, int, int, int]]:
+        """Detects bounding box of salient object/person using alpha cutout."""
+        try:
+            session = self._get_rembg_session()
+            if session:
+                img_io = io.BytesIO()
+                img.save(img_io, format="PNG")
+                cutout_bytes = await asyncio.to_thread(rembg.remove, img_io.getvalue(), session=session)
+                cutout = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+                alpha = np.array(cutout)[:, :, 3]
+                if np.mean(alpha > 40) > 0.03:
+                    binary_mask = (alpha > 40).astype(np.uint8) * 255
+                    contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    if contours:
+                        largest = max(contours, key=cv2.contourArea)
+                        x, y, w_box, h_box = cv2.boundingRect(largest)
+                        return (x, y, x + w_box, y + h_box)
+        except Exception as e:
+            logger.debug(f"[Tool: AI Expand] Saliency detection skipped: {e}")
+        return None
+
+    async def _expand_canvas_fast_neural(
+        self,
+        img: Image.Image,
+        new_w: int,
+        new_h: int,
+        paste_x: int,
+        paste_y: int
+    ) -> bytes:
+        """
+        High-Fidelity Local Neural Inpainting Outpaint.
+        Uses Symmetric Reflection Padding (cv2.BORDER_REFLECT_101) to mirror natural
+        scenery, wood grains, walls, and textures seamlessly—eliminating 1px smearing.
+        Composites 100% untouched central image with cosine feathered alpha blend.
+        """
+        w, h = img.size
+        np_img = np.array(img)[:, :, ::-1]  # RGB to BGR for cv2
+
+        top = paste_y
+        bottom = max(0, new_h - (paste_y + h))
+        left = paste_x
+        right = max(0, new_w - (paste_x + w))
+
+        # 1. Symmetric Reflection Padding (smooth natural scene continuation)
+        canvas_bgr = cv2.copyMakeBorder(
+            np_img,
+            top, bottom, left, right,
+            borderType=cv2.BORDER_REFLECT_101
+        )
+
+        # 2. Inpaint Mask: 255 on newly expanded margins, 0 on central protected original
+        mask = np.full((new_h, new_w), 255, dtype=np.uint8)
+        blend_px = 8
+        mask[
+            paste_y + blend_px : paste_y + h - blend_px,
+            paste_x + blend_px : paste_x + w - blend_px
+        ] = 0
+
+        _, canvas_buf = cv2.imencode(".png", canvas_bgr)
+        _, mask_buf = cv2.imencode(".png", mask)
+
+        # 3. Neural texture synthesis via LaMa
+        out_bytes, elapsed_ms = await self.inpaint_engine.inpaint(
+            canvas_buf.tobytes(),
+            mask_buf.tobytes()
+        )
+        logger.info(f"[Tool: AI Expand] Inpainted {new_w}x{new_h} via Reflection+LaMa in {elapsed_ms:.1f}ms")
+
+        # 4. Composite pristine untouched original image over center with cosine feathering
+        out_bgr = cv2.imdecode(np.frombuffer(out_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if out_bgr is not None:
+            if out_bgr.shape[:2] != (new_h, new_w):
+                out_bgr = cv2.resize(out_bgr, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+
+            blend_mask = np.ones((h, w), dtype=np.float32)
+            if blend_px > 0:
+                ramp = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, blend_px)))
+                if left > 0 and w > blend_px * 2:
+                    blend_mask[:, :blend_px] = ramp[None, :]
+                if right > 0 and w > blend_px * 2:
+                    blend_mask[:, -blend_px:] = ramp[::-1][None, :]
+                if top > 0 and h > blend_px * 2:
+                    blend_mask[:blend_px, :] *= ramp[:, None]
+                if bottom > 0 and h > blend_px * 2:
+                    blend_mask[-blend_px:, :] *= ramp[::-1][:, None]
+
+            blend_3ch = blend_mask[:, :, None]
+            center_crop = out_bgr[paste_y:paste_y + h, paste_x:paste_x + w]
+            composited = (np_img * blend_3ch + center_crop * (1.0 - blend_3ch)).astype(np.uint8)
+            out_bgr[paste_y:paste_y + h, paste_x:paste_x + w] = composited
+
+            _, final_buf = cv2.imencode(".png", out_bgr)
+            return final_buf.tobytes()
+
+        return out_bytes
+
+    async def _expand_canvas_diffusion(
+        self,
+        img: Image.Image,
+        new_w: int,
+        new_h: int,
+        paste_x: int,
+        paste_y: int,
+        prompt: Optional[str] = None
+    ) -> Optional[bytes]:
+        """
+        Generative Diffusion Outpainting via FLUX.1 Kontext Pro / Vision Prompting.
+        Creates realistic scene continuation (furniture, room depth, nature, lighting).
+        """
+        w, h = img.size
+        np_img = np.array(img)[:, :, ::-1]
+
+        top = paste_y
+        bottom = max(0, new_h - (paste_y + h))
+        left = paste_x
+        right = max(0, new_w - (paste_x + w))
+
+        # Reflection padded canvas as visual anchor
+        reflected_bgr = cv2.copyMakeBorder(
+            np_img,
+            top, bottom, left, right,
+            borderType=cv2.BORDER_REFLECT_101
+        )
+        _, canvas_buf = cv2.imencode(".png", reflected_bgr)
+        canvas_b64 = f"data:image/png;base64,{base64.b64encode(canvas_buf.tobytes()).decode()}"
+
+        effective_prompt = prompt.strip() if (prompt and prompt.strip()) else None
+        if not effective_prompt and self.vision_client:
+            try:
+                img_io = io.BytesIO()
+                img.save(img_io, format="JPEG", quality=90)
+                img_b64_src = f"data:image/jpeg;base64,{base64.b64encode(img_io.getvalue()).decode()}"
+                scan = await self.vision_client.scan_photo(img_b64_src)
+                scene_style = scan.get("detected_style", "natural environment")
+                extracted = scan.get("extracted_prompt", "")
+                effective_prompt = f"Seamless wide-angle outpaint continuation of {scene_style}, {extracted[:160]}, consistent lighting, architecture, materials, depth of field, photorealistic, 8k resolution"
+            except Exception as e:
+                logger.warning(f"[Tool: AI Expand] Vision prompt extraction notice: {e}")
+
+        if not effective_prompt:
+            effective_prompt = (
+                "Seamless outpainting expansion of the background environment, continuing the room, flooring, "
+                "scenery, wall textures, and natural lighting smoothly with zero blur and high resolution detail"
+            )
+
+        if self.diffusion_gateway:
+            try:
+                logger.info(f"[Tool: AI Expand] Invoking Generative Diffusion Outpaint: {effective_prompt[:120]}...")
+                diff_bytes = await self.diffusion_gateway.edit_image(
+                    image_url_or_base64=canvas_b64,
+                    prompt=effective_prompt,
+                    seed=42,
+                    model="black-forest-labs/flux.1-kontext-pro"
+                )
+                if diff_bytes and len(diff_bytes) > 2000:
+                    diff_bgr = cv2.imdecode(np.frombuffer(diff_bytes, np.uint8), cv2.IMREAD_COLOR)
+                    if diff_bgr is not None:
+                        diff_bgr = cv2.resize(diff_bgr, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+
+                        blend_px = 12
+                        blend_mask = np.ones((h, w), dtype=np.float32)
+                        ramp = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, blend_px)))
+                        if left > 0 and w > blend_px * 2:
+                            blend_mask[:, :blend_px] = ramp[None, :]
+                        if right > 0 and w > blend_px * 2:
+                            blend_mask[:, -blend_px:] = ramp[::-1][None, :]
+                        if top > 0 and h > blend_px * 2:
+                            blend_mask[:blend_px, :] *= ramp[:, None]
+                        if bottom > 0 and h > blend_px * 2:
+                            blend_mask[-blend_px:, :] *= ramp[::-1][:, None]
+
+                        blend_3ch = blend_mask[:, :, None]
+                        center_crop = diff_bgr[paste_y:paste_y + h, paste_x:paste_x + w]
+                        composited = (np_img * blend_3ch + center_crop * (1.0 - blend_3ch)).astype(np.uint8)
+                        diff_bgr[paste_y:paste_y + h, paste_x:paste_x + w] = composited
+
+                        _, final_buf = cv2.imencode(".png", diff_bgr)
+                        return final_buf.tobytes()
+            except Exception as e:
+                logger.warning(f"[Tool: AI Expand] Generative diffusion outpaint failed, falling back to neural: {e}")
+
+        return None
+
     async def _expand_canvas_lama(self, input_bytes: bytes, target_ratio: str) -> bytes:
+        """Backwards-compatible wrapper routing to the non-blurry fast neural outpainter."""
         input_bytes = self._normalize_image_orientation(input_bytes)
         img = Image.open(io.BytesIO(input_bytes))
         img = ImageOps.exif_transpose(img).convert("RGB")
         w, h = img.size
 
-        # Determine target aspect ratio dimensions
         ratio_map = {
             "16:9": (16, 9),
             "9:16": (9, 16),
@@ -784,29 +1012,17 @@ class ToolService:
             "1:2": (1, 2),
         }
         ratio_clean = (target_ratio or "16:9").strip()
-        if ratio_clean in ratio_map:
-            rw, rh = ratio_map[ratio_clean]
-        elif ":" in ratio_clean:
-            try:
-                parts = ratio_clean.split(":")
-                rw, rh = float(parts[0]), float(parts[1])
-            except Exception:
-                rw, rh = (16, 9)
-        else:
-            rw, rh = (16, 9)
+        rw, rh = ratio_map.get(ratio_clean, (16, 9))
         target_aspect = rw / rh
         current_aspect = w / h
 
         if current_aspect > target_aspect:
-            # Need taller canvas
             new_w = w
             new_h = int(w / target_aspect)
         else:
-            # Need wider canvas
             new_h = h
             new_w = int(h * target_aspect)
 
-        # Cap max dimension to 1280 to ensure sub-second inference while maintaining high-res detail
         max_dim = max(new_w, new_h)
         if max_dim > 1280:
             scale = 1280.0 / max_dim
@@ -816,111 +1032,103 @@ class ToolService:
             h = int(h * scale)
             img = img.resize((w, h), resample=Image.Resampling.LANCZOS)
 
-        # Align to modulo 8 as required by LaMa Fast Fourier Convolutions
         new_w = ((new_w + 7) // 8) * 8
         new_h = ((new_h + 7) // 8) * 8
-
         paste_x = (new_w - w) // 2
         paste_y = (new_h - h) // 2
 
-        np_img = np.array(img)[:, :, ::-1]  # RGB to BGR for cv2
-
-        # 1. Person/Subject Boundary Detection
-        # Detect person/subject so we NEVER stretch the human body, shoulders, or clothes
-        person_mask = None
-        try:
-            session = self._get_rembg_session()
-            if session:
-                img_io = io.BytesIO()
-                img.save(img_io, format="PNG")
-                cutout_bytes = await asyncio.to_thread(rembg.remove, img_io.getvalue(), session=session)
-                cutout = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
-                alpha = np.array(cutout)[:, :, 3]
-                # If foreground detected (>4% of canvas area)
-                if np.mean(alpha > 40) > 0.04:
-                    person_mask = (alpha > 40)
-        except Exception as e:
-            logger.warning(f"[Tool: AI Expand] Foreground segmentation skipped: {e}")
-
-        # 2. Clean Background Plate Generation
-        # If person detected, remove person from background plate before edge extension
-        # so outpainted borders receive ONLY room/studio/sky/floor and NEVER widened shoulders
-        if person_mask is not None:
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-            dilated_mask = cv2.dilate((person_mask * 255).astype(np.uint8), kernel, iterations=2)
-            bg_plate = cv2.inpaint(np_img, dilated_mask, 7, cv2.INPAINT_TELEA)
-        else:
-            bg_plate = np_img
-
-        # 3. Create Expanded Canvas with Clean Background Context
-        canvas = np.zeros((new_h, new_w, 3), dtype=np.uint8)
-        canvas[paste_y:paste_y + h, paste_x:paste_x + w] = bg_plate
-
-        # Extend background edges into surrounding empty regions
-        if paste_x > 0:
-            for x in range(paste_x):
-                canvas[paste_y:paste_y + h, x] = bg_plate[:, 0]
-            for x in range(paste_x + w, new_w):
-                canvas[paste_y:paste_y + h, x] = bg_plate[:, -1]
-        if paste_y > 0:
-            for y in range(paste_y):
-                canvas[y, :] = canvas[paste_y, :]
-            for y in range(paste_y + h, new_h):
-                canvas[y, :] = canvas[paste_y + h - 1, :]
-
-        # 4. Inpaint Mask: 255 (synthesize outer margins), 0 (protect original central image)
-        mask = np.full((new_h, new_w), 255, dtype=np.uint8)
-        blend_px = 4
-        mask[paste_y + blend_px : paste_y + h - blend_px, paste_x + blend_px : paste_x + w - blend_px] = 0
-
-        # Encode canvas and mask to bytes
-        _, canvas_buf = cv2.imencode(".png", canvas)
-        _, mask_buf = cv2.imencode(".png", mask)
-
-        # 5. Neural Inpainting via injected InpaintEngine (LaMa)
-        out_bytes, elapsed_ms = await self.inpaint_engine.inpaint(
-            canvas_buf.tobytes(),
-            mask_buf.tobytes()
-        )
-        logger.info(f"[Tool: AI Expand] Inpainted {new_w}x{new_h} via LaMa in {elapsed_ms:.1f}ms (Zero Distortion)")
-
-        # 6. Composite Pristine Original Subject and Image onto Center
-        out_bgr = cv2.imdecode(np.frombuffer(out_bytes, np.uint8), cv2.IMREAD_COLOR)
-        if out_bgr is not None:
-            # Feathered alpha blend at 4px boundary to eliminate seam artifacts
-            center_crop = out_bgr[paste_y:paste_y + h, paste_x:paste_x + w].copy()
-            blend_mask = np.ones((h, w), dtype=np.float32)
-            if paste_x > 0 and w > blend_px * 2:
-                blend_mask[:, :blend_px] = np.linspace(0, 1, blend_px)[None, :]
-                blend_mask[:, -blend_px:] = np.linspace(1, 0, blend_px)[None, :]
-            if paste_y > 0 and h > blend_px * 2:
-                blend_mask[:blend_px, :] *= np.linspace(0, 1, blend_px)[:, None]
-                blend_mask[-blend_px:, :] *= np.linspace(1, 0, blend_px)[:, None]
-
-            blend_3ch = blend_mask[:, :, None]
-            composited_center = (np_img * blend_3ch + center_crop * (1.0 - blend_3ch)).astype(np.uint8)
-            out_bgr[paste_y:paste_y + h, paste_x:paste_x + w] = composited_center
-
-            _, final_buf = cv2.imencode(".png", out_bgr)
-            return final_buf.tobytes()
-
-        return out_bytes
+        return await self._expand_canvas_fast_neural(img, new_w, new_h, paste_x, paste_y)
 
     async def execute_ai_expand(self, req: AiExpandRequest) -> AiExpandResponse:
         task_id = f"tool_exp_{uuid.uuid4().hex[:8]}"
         target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        target_ratio = req.target_ratio or "16:9"
+        alignment = (req.alignment or "auto").lower().strip()
+        engine = (req.engine or "diffusion").lower().strip()
+
         try:
-            logger.info(f"[Tool: AI Expand] Target Ratio: {req.target_ratio} | Processing: {target_url[:80]}...")
+            logger.info(f"[Tool: AI Expand] Target Ratio: {target_ratio} | Alignment: {alignment} | Engine: {engine} | Processing: {target_url[:80]}...")
             if getattr(req, 'image_base64', None):
                 b64 = req.image_base64.split(",", 1)[-1] if "," in req.image_base64 else req.image_base64
                 input_bytes = self._normalize_image_orientation(base64.b64decode(b64))
             else:
                 input_bytes = await self._download_image_bytes(target_url)
 
-            output_bytes = await self._expand_canvas_lama(
-                input_bytes,
-                req.target_ratio or "16:9"
+            input_bytes = self._normalize_image_orientation(input_bytes)
+            img = Image.open(io.BytesIO(input_bytes))
+            img = ImageOps.exif_transpose(img).convert("RGB")
+            w, h = img.size
+
+            ratio_map = {
+                "16:9": (16, 9),
+                "9:16": (9, 16),
+                "4:5": (4, 5),
+                "1:1": (1, 1),
+                "4:3": (4, 3),
+                "3:4": (3, 4),
+                "2:3": (2, 3),
+                "3:2": (3, 2),
+                "2:1": (2, 1),
+                "1:2": (1, 2),
+            }
+            rw, rh = ratio_map.get(target_ratio, (16, 9))
+            target_aspect = rw / rh
+            current_aspect = w / h
+
+            if current_aspect > target_aspect:
+                new_w = w
+                new_h = int(w / target_aspect)
+            else:
+                new_h = h
+                new_w = int(h * target_aspect)
+
+            # Cap max dimension to 1280 to maintain responsive inference
+            max_dim = max(new_w, new_h)
+            if max_dim > 1280:
+                scale = 1280.0 / max_dim
+                new_w = int(new_w * scale)
+                new_h = int(new_h * scale)
+                w = int(w * scale)
+                h = int(h * scale)
+                img = img.resize((w, h), resample=Image.Resampling.LANCZOS)
+
+            new_w = ((new_w + 7) // 8) * 8
+            new_h = ((new_h + 7) // 8) * 8
+
+            # Detect salient object bounding box for smart anchoring
+            salient_bbox = None
+            if alignment == "auto":
+                salient_bbox = await self._detect_salient_bbox(img)
+
+            # Calculate precise placement
+            paste_x, paste_y = self._compute_alignment_offsets(
+                w, h, new_w, new_h, alignment, salient_bbox
             )
+
+            # Route engine: Generative Diffusion (FLUX) vs Fast Reflection LaMa
+            output_bytes = None
+            if engine == "diffusion":
+                output_bytes = await self._expand_canvas_diffusion(
+                    img, new_w, new_h, paste_x, paste_y, prompt=req.prompt
+                )
+
+            # Fallback to upgraded fast neural outpainter
+            if not output_bytes:
+                output_bytes = await self._expand_canvas_fast_neural(
+                    img, new_w, new_h, paste_x, paste_y
+                )
+
+            # HD 2K Edge Sharpening & Post-Processing
+            if (req.quality or "1k").lower() == "2k":
+                try:
+                    dec = cv2.imdecode(np.frombuffer(output_bytes, np.uint8), cv2.IMREAD_COLOR)
+                    if dec is not None:
+                        blurred = cv2.GaussianBlur(dec, (0, 0), 2.0)
+                        sharpened = cv2.addWeighted(dec, 1.25, blurred, -0.25, 0)
+                        _, sharp_buf = cv2.imencode(".png", sharpened)
+                        output_bytes = sharp_buf.tobytes()
+                except Exception as e_sharp:
+                    logger.debug(f"[Tool: AI Expand] 2K sharpening notice: {e_sharp}")
 
             output_url = await self._upload_to_supabase(output_bytes, folder="ai_expands", ext="jpg")
             if not output_url:
@@ -933,7 +1141,9 @@ class ToolService:
                 output_url=output_url,
                 image_url=output_url,
                 url=output_url,
-                target_ratio=req.target_ratio or "16:9",
+                target_ratio=target_ratio,
+                alignment=alignment,
+                engine=engine,
                 tokens_consumed=0,
                 credits_deducted=0,
                 is_free=True
@@ -947,7 +1157,9 @@ class ToolService:
                 output_url=fallback_res,
                 image_url=fallback_res,
                 url=fallback_res,
-                target_ratio=req.target_ratio or "16:9",
+                target_ratio=target_ratio,
+                alignment=alignment,
+                engine=engine,
                 tokens_consumed=0,
                 credits_deducted=0,
                 is_free=True

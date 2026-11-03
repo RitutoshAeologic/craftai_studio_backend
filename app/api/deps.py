@@ -118,7 +118,8 @@ def get_tool_service(
     colorize_engine: IColorizeEngine = Depends(get_colorize_engine),
     bg_remover_engine: IBackgroundRemoverEngine = Depends(get_bg_remover_engine),
     upscaler_engine: IUpscalerEngine = Depends(get_upscaler_engine),
-    storage_provider: IStorageProvider = Depends(get_storage_provider)
+    storage_provider: IStorageProvider = Depends(get_storage_provider),
+    vision_client: IVisionClient = Depends(get_vision_client)
 ) -> ToolService:
     gateway = diffusion_gateway if isinstance(diffusion_gateway, IDiffusionGateway) else get_diffusion_gateway()
     store = task_store if isinstance(task_store, ITaskStore) else get_task_store()
@@ -128,6 +129,7 @@ def get_tool_service(
     colorize = colorize_engine if isinstance(colorize_engine, IColorizeEngine) else get_colorize_engine()
     bg_rem = bg_remover_engine if isinstance(bg_remover_engine, IBackgroundRemoverEngine) else get_bg_remover_engine()
     upscale = upscaler_engine if isinstance(upscaler_engine, IUpscalerEngine) else get_upscaler_engine()
+    vision = vision_client if isinstance(vision_client, IVisionClient) else get_vision_client()
     return ToolService(
         diffusion_gateway=gateway,
         task_store=store,
@@ -137,7 +139,8 @@ def get_tool_service(
         colorize_engine=colorize,
         bg_remover_engine=bg_rem,
         upscaler_engine=upscale,
-        storage_provider=storage_provider if isinstance(storage_provider, IStorageProvider) else get_storage_provider()
+        storage_provider=storage_provider if isinstance(storage_provider, IStorageProvider) else get_storage_provider(),
+        vision_client=vision
     )
 
 from app.infrastructure.clients.local_diffusion_client import LocalDiffusionClient

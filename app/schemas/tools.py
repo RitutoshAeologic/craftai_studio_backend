@@ -158,6 +158,9 @@ class AiExpandRequest(BaseModel):
     target_ratio: Optional[str] = "16:9"
     targetRatio: Optional[str] = None
     quality: Optional[str] = "1k"
+    alignment: Optional[str] = "auto"
+    prompt: Optional[str] = None
+    engine: Optional[str] = "diffusion"
     user_id: Optional[str] = None
     userId: Optional[str] = None
 
@@ -171,6 +174,15 @@ class AiExpandRequest(BaseModel):
             ratio = data.get("target_ratio") or data.get("targetRatio")
             if ratio:
                 data["target_ratio"] = ratio
+            align = data.get("alignment") or data.get("align")
+            if align:
+                data["alignment"] = align
+            p = data.get("prompt") or data.get("scene_prompt")
+            if p:
+                data["prompt"] = p
+            eng = data.get("engine")
+            if eng:
+                data["engine"] = eng
         return data
 
 class AiExpandResponse(BaseModel):
@@ -180,6 +192,8 @@ class AiExpandResponse(BaseModel):
     image_url: str
     url: str = ""
     target_ratio: str = "16:9"
+    alignment: str = "auto"
+    engine: str = "diffusion"
     tokens_consumed: int = 0
     credits_deducted: int = 0
     is_free: bool = True
