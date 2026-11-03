@@ -137,6 +137,8 @@ class AiBackgroundRequest(BaseModel):
             ratio = data.get("aspect_ratio") or data.get("aspectRatio")
             if ratio:
                 data["aspect_ratio"] = ratio
+            if "harmonize_lighting" not in data and "harmonizeLighting" in data:
+                data["harmonize_lighting"] = data["harmonizeLighting"]
         return data
 
 class AiBackgroundResponse(BaseModel):
@@ -207,6 +209,8 @@ class ProductDetailRequest(BaseModel):
             ratio = data.get("aspect_ratio") or data.get("aspectRatio")
             if ratio:
                 data["aspect_ratio"] = ratio
+            if "harmonize_lighting" not in data and "harmonizeLighting" in data:
+                data["harmonize_lighting"] = data["harmonizeLighting"]
         return data
 
 class ProductDetailResponse(BaseModel):
@@ -349,6 +353,7 @@ class ProductPackResponse(BaseModel):
     studio_pedestal_url: str
     lifestyle_table_url: str
     story_flyer_url: str
+    pack: dict[str, str] = Field(default_factory=dict)
     all_urls: List[str] = Field(default_factory=list)
     tokens_consumed: int = 0
     credits_deducted: int = 0
@@ -392,6 +397,8 @@ class MagicGrabResponse(BaseModel):
     status: str = "completed"
     cutout_url: str
     clean_background_url: str
+    background_url: str = Field(default="", description="Alias for clean_background_url")
+    all_urls: List[str] = Field(default_factory=list)
     tokens_consumed: int = 0
     credits_deducted: int = 0
     latency_ms: Optional[float] = None

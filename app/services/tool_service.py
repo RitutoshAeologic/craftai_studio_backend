@@ -1237,6 +1237,17 @@ class ToolService:
             life_url = life_url or f"data:image/png;base64,{base64.b64encode(life_b).decode()}"
             story_url = story_url or f"data:image/jpeg;base64,{base64.b64encode(story_b).decode()}"
 
+            pack_dict = {
+                "amazon_white": white_url,
+                "studio_pedestal": ped_url,
+                "lifestyle_table": life_url,
+                "story_flyer": story_url,
+                "amazon_white_url": white_url,
+                "studio_pedestal_url": ped_url,
+                "lifestyle_table_url": life_url,
+                "story_flyer_url": story_url,
+            }
+
             return ProductPackResponse(
                 task_id=task_id,
                 status="completed",
@@ -1245,6 +1256,7 @@ class ToolService:
                 studio_pedestal_url=ped_url,
                 lifestyle_table_url=life_url,
                 story_flyer_url=story_url,
+                pack=pack_dict,
                 all_urls=[white_url, ped_url, life_url, story_url],
                 tokens_consumed=0,
                 credits_deducted=0,
@@ -1253,6 +1265,16 @@ class ToolService:
         except Exception as e:
             logger.error(f"[Tool: Product Pack] Failed: {e}", exc_info=True)
             fallback = target_url
+            fallback_pack = {
+                "amazon_white": fallback,
+                "studio_pedestal": fallback,
+                "lifestyle_table": fallback,
+                "story_flyer": fallback,
+                "amazon_white_url": fallback,
+                "studio_pedestal_url": fallback,
+                "lifestyle_table_url": fallback,
+                "story_flyer_url": fallback,
+            }
             return ProductPackResponse(
                 task_id=task_id,
                 status="completed",
@@ -1261,6 +1283,7 @@ class ToolService:
                 studio_pedestal_url=fallback,
                 lifestyle_table_url=fallback,
                 story_flyer_url=fallback,
+                pack=fallback_pack,
                 all_urls=[fallback, fallback, fallback, fallback],
                 tokens_consumed=0,
                 credits_deducted=0,
@@ -1526,6 +1549,8 @@ class ToolService:
                 status="completed",
                 cutout_url=cut_url,
                 clean_background_url=bg_url,
+                background_url=bg_url,
+                all_urls=[cut_url, bg_url],
                 tokens_consumed=0,
                 credits_deducted=0,
                 latency_ms=elapsed_ms,
@@ -1539,6 +1564,8 @@ class ToolService:
                 status="completed",
                 cutout_url=fallback,
                 clean_background_url=fallback,
+                background_url=fallback,
+                all_urls=[fallback, fallback],
                 tokens_consumed=0,
                 credits_deducted=0,
                 is_free=True

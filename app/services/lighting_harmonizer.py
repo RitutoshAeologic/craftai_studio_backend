@@ -63,3 +63,4 @@ class LightingHarmonizer:
             return Image.fromarray(cutout_rgba, mode="RGBA")
         except Exception:
             return cutout_img
+

@@ -51,3 +51,4 @@ class PaletteExtractor:
             return dominant if dominant else [(99, 102, 241), (236, 72, 153), (34, 197, 94)]
         except Exception:
             return [(99, 102, 241), (236, 72, 153), (34, 197, 94)]
+
