@@ -6,3 +6,4 @@ while true; do
   echo "[TUNNEL SUPERVISOR] localtunnel exited with code $EXIT_CODE at $(date). Restarting in 2 seconds..."
   sleep 2
 done
+
