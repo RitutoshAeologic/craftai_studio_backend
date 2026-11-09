@@ -166,7 +166,8 @@ class GenerationService:
         # ── 2. Route Generation Engine ─────────────────────────────────────────
         direct_url = None
         requested_model = (req.model or "flux").lower()
-        tier_label = "Tier 0 (SDXL-Lightning RealVisXL Engine)" if requested_model in ("sdxl", "lightning") else "Tier 0 (FLUX.1-schnell via Cloudflare Workers AI)"
+        is_sdxl = any(k in requested_model for k in ("sdxl", "lightning", "realvis"))
+        tier_label = "Tier 0 (SDXL-Lightning RealVisXL Engine)" if is_sdxl else "Tier 0 (FLUX.1-schnell via Cloudflare Workers AI)"
 
         # Determine if this is an image modification/refinement request on an active image
         is_edit_request = bool(req.edit_instruction) or (
@@ -247,7 +248,7 @@ class GenerationService:
         effective_prompt = self._optimize_prompt_for_diffusion(effective_prompt)
 
         # 2c. Primary Serverless Engine: Cloudflare Workers AI (Free daily allowance, clean raw bytes)
-        if not direct_url and requested_model not in ("sdxl", "lightning") and self.cloudflare_client and self.cloudflare_client.is_configured:
+        if not direct_url and not is_sdxl and self.cloudflare_client and self.cloudflare_client.is_configured:
             try:
                 logger.info("[Generation] Invoking Cloudflare Workers AI for serverless generation...")
                 cf_bytes = await self.cloudflare_client.generate_image(
@@ -370,7 +371,7 @@ class GenerationService:
                     "category": assigned_category,
                     "prompt_text": effective_prompt,
                     "prompt": effective_prompt,
-                    "model_used": "sdxl_lightning" if "SDXL" in tier_label else "flux",
+                    "model_used": "sdxl_lightning" if is_sdxl else "flux",
                     "preview_image_url": direct_url,
                     "preview_url": direct_url,
                     "tool_applied": "face_lock" if has_face_lock else "text_to_image",
