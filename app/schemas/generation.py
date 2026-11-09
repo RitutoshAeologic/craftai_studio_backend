@@ -21,6 +21,7 @@ class GenerationDispatchRequest(BaseModel):
     remixedFromPromptId: Optional[str] = None
     edit_instruction: Optional[str] = Field(None, description="Direct natural language instruction for editing an active image")
     editInstruction: Optional[str] = None
+    category: Optional[str] = Field(None, description="Explicit or detected visual category")
 
     @model_validator(mode="before")
     @classmethod
@@ -70,12 +71,14 @@ class GenerationDispatchResponse(BaseModel):
     status: str
     estimated_seconds: int
     direct_image_url: Optional[str] = None
+    category: Optional[str] = Field("General", description="Assigned visual category")
 
 class GenerationStatusResponse(BaseModel):
     task_id: str
     status: str
     progress: int
     output_url: Optional[str] = None
+    category: Optional[str] = Field(None, description="Assigned visual category")
 
 class WebSocketProgressMessage(BaseModel):
     progress: int = Field(..., ge=0, le=100)

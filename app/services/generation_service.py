@@ -15,6 +15,7 @@ from app.infrastructure.clients.local_diffusion_client import LocalDiffusionClie
 from app.infrastructure.storage.task_store import ITaskStore
 from app.schemas.generation import GenerationDispatchRequest, GenerationDispatchResponse, GenerationStatusResponse
 from app.services.wallet_service import IWalletService, SupabaseWalletService
+from app.services.classification_service import CategoryClassifier
 from app.core.supabase_client import get_supabase_admin
 from app.core.logging import logger
 
@@ -336,12 +337,21 @@ class GenerationService:
                     model="flux"
                 )
 
+        # Determine visual category using multi-stage classifier
+        style_hint = (req.structured_metadata or {}).get("style_preset") or (req.structured_metadata or {}).get("style")
+        assigned_category = CategoryClassifier.classify(
+            prompt=effective_prompt,
+            explicit_style=style_hint,
+            explicit_category=req.category
+        )
+
         # ── 3. Record Task in State Store ─────────────────────────────────────
         self.task_store.save_task(task_id, {
             "tier": tier_label,
             "status": "completed",
             "progress": 100,
             "output_url": direct_url,
+            "category": assigned_category,
             "prompt": effective_prompt,
             "has_face_lock": has_face_lock,
             "extracted_features": extracted_face_tokens
@@ -357,6 +367,7 @@ class GenerationService:
                     "user_id": user_id,
                     "type": "IMAGE_GEN",
                     "status": "completed",
+                    "category": assigned_category,
                     "prompt_text": effective_prompt,
                     "prompt": effective_prompt,
                     "model_used": "sdxl_lightning" if "SDXL" in tier_label else "flux",
@@ -370,7 +381,7 @@ class GenerationService:
                     "is_download_unlocked": False,
                     "metadata": req.structured_metadata or {}
                 }).execute()
-                logger.info(f"[Cloud Jobs] Persisted generation {task_id} for user {user_id}")
+                logger.info(f"[Cloud Jobs] Persisted generation {task_id} (category: '{assigned_category}') for user {user_id}")
             except Exception as e:
                 logger.debug(f"[Cloud Jobs] Table save skipped or pending migration: {e}")
 
@@ -379,7 +390,8 @@ class GenerationService:
             tier=tier_label,
             status="ready",
             estimated_seconds=18 if has_face_lock else 6,
-            direct_image_url=direct_url
+            direct_image_url=direct_url,
+            category=assigned_category
         )
 
     def get_status(self, task_id: str) -> GenerationStatusResponse:
@@ -390,13 +402,15 @@ class GenerationService:
                 task_id=task_id,
                 status="completed",
                 progress=100,
-                output_url=fallback_url
+                output_url=fallback_url,
+                category="Cyberpunk"
             )
         return GenerationStatusResponse(
             task_id=task_id,
             status=task.get("status", "unknown"),
             progress=task.get("progress", 0),
-            output_url=task.get("output_url")
+            output_url=task.get("output_url"),
+            category=task.get("category", "General")
         )
 
     def get_websocket_phases(self, task_id: str) -> List[Dict[str, Any]]:

@@ -135,7 +135,15 @@ async def universal_search(req: UniversalSearchRequest):
             query = query.ilike("title", f"%{query_str}%")
 
         if req.categories and len(req.categories) > 0:
-            query = query.in_("category", req.categories)
+            clean_cats = [c for c in req.categories if c and c.lower() != "all"]
+            if clean_cats:
+                expanded_cats = set()
+                for c in clean_cats:
+                    expanded_cats.add(c)
+                    expanded_cats.add(c.lower())
+                    expanded_cats.add(c.capitalize())
+                    expanded_cats.add(c.title())
+                query = query.in_("category", list(expanded_cats))
 
         res = query.order("created_at", desc=True).limit(req.page_size).execute()
         if res.data and len(res.data) > 0:
@@ -179,8 +187,10 @@ async def universal_search(req: UniversalSearchRequest):
         )
         if not match_query:
             continue
-        if req.categories and item["category"] not in req.categories and "All" not in req.categories:
-            continue
+        if req.categories and len(req.categories) > 0:
+            clean_req_cats = [c.lower() for c in req.categories if c and c.lower() != "all"]
+            if clean_req_cats and item["category"].lower() not in clean_req_cats:
+                continue
         if req.models and "All Models" not in req.models:
             item_clean = re.sub(r"[^a-z0-9]", "", item["model_used"].lower())
             req_clean = [re.sub(r"[^a-z0-9]", "", m.lower()) for m in req.models]
