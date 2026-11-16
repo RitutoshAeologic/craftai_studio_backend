@@ -19,6 +19,8 @@ class GenerationDispatchRequest(BaseModel):
     model: Optional[str] = Field("flux", description="Diffusion model: flux, gemini, chatgpt")
     remixed_from_prompt_id: Optional[str] = Field(None, description="Original explore prompt ID if remixed")
     remixedFromPromptId: Optional[str] = None
+    anchor_image_url: Optional[str] = Field(None, description="Anchor image URL for style and composition remixing")
+    anchorImageUrl: Optional[str] = None
     edit_instruction: Optional[str] = Field(None, description="Direct natural language instruction for editing an active image")
     editInstruction: Optional[str] = None
     category: Optional[str] = Field(None, description="Explicit or detected visual category")
@@ -45,6 +47,9 @@ class GenerationDispatchRequest(BaseModel):
             remix = data.get("remixed_from_prompt_id") or data.get("remixedFromPromptId")
             if remix:
                 data["remixed_from_prompt_id"] = str(remix)
+            anchor = data.get("anchor_image_url") or data.get("anchorImageUrl")
+            if anchor:
+                data["anchor_image_url"] = str(anchor)
             edit = data.get("edit_instruction") or data.get("editInstruction")
             if edit:
                 data["edit_instruction"] = str(edit)

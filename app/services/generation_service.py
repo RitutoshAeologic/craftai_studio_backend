@@ -126,6 +126,14 @@ class GenerationService:
 
     async def dispatch(self, req: GenerationDispatchRequest, user_id: Optional[str] = None) -> GenerationDispatchResponse:
         task_id = req.task_id if req.task_id else f"gen_{os.urandom(4).hex()}"
+        
+        # Harmonize Mobile & Web Remix parameters:
+        # If remixed_from_prompt_id is set without character_id, anchor the artwork style rather than forcing facial lock
+        if req.remixed_from_prompt_id and not req.anchor_image_url and req.face_reference_urls:
+            req.anchor_image_url = req.face_reference_urls[0]
+            if not req.character_id:
+                req.face_reference_urls = None
+
         has_face_lock = bool(req.face_reference_urls and len(req.face_reference_urls) > 0) or bool(req.character_id)
         cost = 3.0 if has_face_lock else 2.0
 
@@ -162,6 +170,12 @@ class GenerationService:
             cleaned = re.sub(r'preserve\s+my\s+identity(\s*,)?\s*', '', cleaned, flags=re.IGNORECASE)
             effective_prompt = f"Portrait of a {extracted_face_tokens}, {cleaned.strip()}"
             logger.info(f"[Face-Lock] Synthesized identity-conditioned prompt: {effective_prompt[:150]}...")
+
+        # ── 1.5 Anchor Image Visual Style Conditioning (General Artworks) ─────
+        if req.anchor_image_url and not extracted_face_tokens:
+            logger.info(f"[Remix-Anchor] Anchored visual style from: {req.anchor_image_url}")
+            if "remix" not in effective_prompt.lower() and "style" not in effective_prompt.lower():
+                effective_prompt = f"{effective_prompt}, visually anchored composition, coherent aesthetic, masterpiece, 8k"
 
         # ── 2. Route Generation Engine ─────────────────────────────────────────
         direct_url = None
@@ -366,6 +380,7 @@ class GenerationService:
                     "id": str(uuid.uuid4()),
                     "job_id": task_id,
                     "user_id": user_id,
+                    "remixed_from_prompt_id": req.remixed_from_prompt_id,
                     "type": "IMAGE_GEN",
                     "status": "completed",
                     "category": assigned_category,
@@ -374,7 +389,7 @@ class GenerationService:
                     "model_used": "sdxl_lightning" if is_sdxl else "flux",
                     "preview_image_url": direct_url,
                     "preview_url": direct_url,
-                    "tool_applied": "face_lock" if has_face_lock else "text_to_image",
+                    "tool_applied": "remix" if req.remixed_from_prompt_id else ("face_lock" if has_face_lock else "text_to_image"),
                     "aspect_ratio": f"{req.width}:{req.height}" if req.width and req.height else "1:1",
                     "dimensions": f"{req.width or 1024}x{req.height or 1024}",
                     "seed": req.seed or 42,

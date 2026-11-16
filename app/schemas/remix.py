@@ -5,7 +5,7 @@ import uuid
 
 class RemixMessage(BaseModel):
     id: str = Field(default_factory=lambda: f"msg_{uuid.uuid4().hex[:12]}")
-    session_id: str
+    session_id: Optional[str] = None
     role: str = "assistant"  # user | assistant
     content: str
     diff_added: List[str] = Field(default_factory=list)
@@ -54,6 +54,7 @@ class RemixSessionCreateRequest(BaseModel):
 
 class RemixSessionResponse(BaseModel):
     id: str
+    session_id: Optional[str] = None
     user_id: Optional[str] = None
     anchor_image_url: str
     source_type: str = "explore"
@@ -65,6 +66,18 @@ class RemixSessionResponse(BaseModel):
     created_at: str
     updated_at: str
     messages: List[RemixMessage] = Field(default_factory=list)
+    welcome_message: Optional[str] = None
+    suggested_chips: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def populate_aliases(self):
+        if not self.session_id:
+            self.session_id = self.id
+        if not self.welcome_message and self.messages:
+            self.welcome_message = self.messages[0].content
+        if not self.suggested_chips and self.messages:
+            self.suggested_chips = self.messages[0].suggested_chips
+        return self
 
 class RemixChatRequest(BaseModel):
     session_id: str
@@ -100,9 +113,25 @@ class RemixChatRequest(BaseModel):
 class RemixChatTurnResponse(BaseModel):
     session_id: str
     compiled_prompt: str
+    refined_prompt: Optional[str] = None
+    explanation: Optional[str] = None
+    diff_added: Optional[List[str]] = Field(default_factory=list)
+    diff_removed: Optional[List[str]] = Field(default_factory=list)
     user_message: RemixMessage
     assistant_message: RemixMessage
     turn_count: int
     suggested_chips: List[str] = Field(default_factory=list)
     model_used: str = "groq"
     latency_ms: int = 0
+
+    @model_validator(mode="after")
+    def populate_aliases(self):
+        if not self.refined_prompt:
+            self.refined_prompt = self.compiled_prompt
+        if not self.explanation:
+            self.explanation = self.assistant_message.content
+        if not self.diff_added and self.assistant_message.diff_added:
+            self.diff_added = self.assistant_message.diff_added
+        if not self.diff_removed and self.assistant_message.diff_removed:
+            self.diff_removed = self.assistant_message.diff_removed
+        return self

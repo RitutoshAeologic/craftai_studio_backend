@@ -24,9 +24,28 @@ async def dispatch_generation(
     if req.face_reference_urls and len(req.face_reference_urls) > 0:
         background_tasks.add_task(PrivacyService.purge_reference_images, req.face_reference_urls, 30)
 
-    # Royalty Hook (Controlled via remote settings; disabled by default during dev)
-    if req.remixed_from_prompt_id and ConfigService.is_royalty_enabled():
-        logger.info(f"[Royalty] User {current_user.get('user_id')} remixed prompt {req.remixed_from_prompt_id}")
+    # Royalty Hook: Automatically credit original creator when an artwork is remixed
+    if req.remixed_from_prompt_id:
+        buyer_id = current_user.get("user_id")
+        try:
+            admin = get_supabase_admin()
+            orig = admin.table("explore_prompts").select("id, author_id, user_id, title, author_royalty_cut").eq("id", req.remixed_from_prompt_id).maybe_single().execute()
+            if orig.data:
+                creator_id = orig.data.get("author_id") or orig.data.get("user_id")
+                royalty_cut = float(orig.data.get("author_royalty_cut") or 1.60)
+                if creator_id and creator_id != buyer_id:
+                    admin.rpc("increment_creator_royalty", {
+                        "p_creator_id": creator_id,
+                        "p_amount": royalty_cut,
+                        "p_prompt_id": req.remixed_from_prompt_id,
+                        "p_buyer_id": buyer_id
+                    }).execute()
+                    admin.rpc("increment_prompt_remix_count", {
+                        "p_prompt_id": req.remixed_from_prompt_id
+                    }).execute()
+                    logger.info(f"[Royalty ✅] Credited {royalty_cut} Cr to creator {creator_id} for remixed prompt {req.remixed_from_prompt_id}")
+        except Exception as e:
+            logger.error(f"[Royalty ⚠️] Failed to process creator royalty: {e}")
 
     return res
 
