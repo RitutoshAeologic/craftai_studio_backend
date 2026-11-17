@@ -7,6 +7,7 @@ import onnxruntime as ort
 from PIL import Image
 from typing import Tuple, Optional
 from huggingface_hub import hf_hub_download
+from app.core.exceptions import ValidationException
 from app.core.logging import logger
 
 class DDColorService:
@@ -61,7 +62,12 @@ class DDColorService:
         np_img = np.frombuffer(image_bytes, np.uint8)
         img_bgr = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
         if img_bgr is None:
-            raise ValueError("Could not decode input image bytes for colorization")
+            raise ValidationException("The image file is corrupted or not a valid image format.")
+
+        # Guard against completely blank / uniform single-color image
+        img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        if np.std(img_gray) < 3.0:
+            raise ValidationException("The uploaded photo is completely blank or uniform. Please upload a vintage or black-and-white photo with visible content.")
 
         orig_h, orig_w = img_bgr.shape[:2]
 

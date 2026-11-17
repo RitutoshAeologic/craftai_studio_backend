@@ -102,5 +102,29 @@ class TestAiToolsEdgeCases(unittest.IsolatedAsyncioTestCase):
             "No background detected" in str(ctx.exception)
         )
 
+    async def test_colorize_solid_white_fails_cleanly(self):
+        """Solid uniform white image has no textures/shadows to colorize."""
+        solid_b64 = self._create_solid_image_b64(color=(255, 255, 255))
+        from app.schemas.tools import ColorizeRequest
+        req = ColorizeRequest(image_url=solid_b64)
+        with self.assertRaises(ValidationException) as ctx:
+            await self.service.colorize_image(req)
+        self.assertIn("completely blank or uniform", str(ctx.exception))
+
+    async def test_upscale_solid_white_fails_cleanly(self):
+        """Solid uniform white image should not waste credits on upscaling."""
+        solid_b64 = self._create_solid_image_b64(color=(255, 255, 255))
+        req = UpscaleRequest(image_url=solid_b64)
+        with self.assertRaises(ValidationException) as ctx:
+            await self.service.upscale_image(req)
+        self.assertIn("completely blank or uniform", str(ctx.exception))
+
+    async def test_upscale_corrupt_image_fails_cleanly(self):
+        corrupt_b64 = "data:image/png;base64,bm90X2FuX2ltYWdlX2F0X2FsbA=="
+        req = UpscaleRequest(image_url=corrupt_b64)
+        with self.assertRaises(ValidationException) as ctx:
+            await self.service.upscale_image(req)
+        self.assertIn("corrupted or not a valid image", str(ctx.exception))
+
 if __name__ == "__main__":
     unittest.main()

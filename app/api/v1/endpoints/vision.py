@@ -45,6 +45,30 @@ async def upload_reference_photo(
         content_type = file.content_type or ("image/png" if ext == "png" else "image/jpeg")
         content = await file.read()
 
+        if not content or len(content) == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty (0 bytes). Please select a valid photo.")
+
+        try:
+            import io
+            import numpy as np
+            from PIL import Image
+            pil_img = Image.open(io.BytesIO(content))
+            pil_img.verify()
+            # Inspect content contrast / blank check
+            pil_check = Image.open(io.BytesIO(content)).convert("L")
+            if np.std(np.array(pil_check)) < 2.0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="The uploaded photo is completely blank or uniform white. Please upload a clear photo with visible content."
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="The uploaded file is corrupted or not a valid image format (JPG, PNG, HEIC)."
+            )
+
         public_url = await storage.upload(
             data=content,
             folder="reference-images",

@@ -5,6 +5,8 @@ from typing import Tuple, Optional
 from app.infrastructure.tools.base import IUpscalerEngine
 from app.infrastructure.clients.onnx_upscaler_client import OnnxUpscalerClient
 from app.core.config import settings
+from app.core.exceptions import ValidationException
+import numpy as np
 from app.core.logging import logger
 
 class CompositeUpscalerEngine(IUpscalerEngine):
@@ -17,7 +19,14 @@ class CompositeUpscalerEngine(IUpscalerEngine):
         self.onnx_client = onnx_client or OnnxUpscalerClient()
 
     def _upscale_cpu_sync(self, input_bytes: bytes, scale: int, mode: str) -> Tuple[bytes, str, str]:
-        img = Image.open(io.BytesIO(input_bytes)).convert("RGB")
+        try:
+            img = Image.open(io.BytesIO(input_bytes)).convert("RGB")
+        except Exception:
+            raise ValidationException("The provided image file is corrupted or not a valid image format.")
+
+        gray = img.convert("L")
+        if np.std(np.array(gray)) < 2.0:
+            raise ValidationException("The selected photo is completely blank or uniform. Upscaling requires an image with visible content.")
         orig_w, orig_h = img.size
         original_res = f"{orig_w}x{orig_h}"
 
