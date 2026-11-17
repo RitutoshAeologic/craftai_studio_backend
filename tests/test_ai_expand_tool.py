@@ -65,6 +65,7 @@ class TestAiExpandTool(unittest.IsolatedAsyncioTestCase):
         raw_bytes = buf.getvalue()
 
         req = AiExpandRequest(
+            image_url="https://mock.image/test.jpg",
             target_ratio="16:9",
             alignment="left",
             engine="fast"

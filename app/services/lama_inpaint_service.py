@@ -8,6 +8,7 @@ from PIL import Image
 from typing import Tuple, Optional
 from huggingface_hub import hf_hub_download
 from app.core.logging import logger
+from app.core.exceptions import ValidationException
 
 class LamaInpaintService:
     """
@@ -72,6 +73,15 @@ class LamaInpaintService:
         # Ensure mask matches image dimensions
         if mask_gray.shape[:2] != (orig_h, orig_w):
             mask_gray = cv2.resize(mask_gray, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+
+        # Edge case validation: empty mask or oversized mask
+        mask_pixels = int(np.sum(mask_gray > 10))
+        if mask_pixels == 0:
+            raise ValidationException("No object area was selected. Please brush over the object you want to erase.")
+
+        mask_ratio = mask_pixels / float(mask_gray.size)
+        if mask_ratio > 0.90:
+            raise ValidationException("Selected area is too large. Please brush only over the specific object you wish to remove.")
 
         # 2. Dilate mask slightly to prevent outline/shadow fringe around erased object
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))

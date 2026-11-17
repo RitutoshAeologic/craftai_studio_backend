@@ -52,6 +52,7 @@ from app.schemas.tools import (
 from app.services.lama_inpaint_service import LamaInpaintService
 from app.services.ddcolor_service import DDColorService
 from app.core.supabase_client import get_supabase_admin
+from app.core.exceptions import AppException, ValidationException
 from app.core.logging import logger
 
 FALLBACK_TOOL_IMAGE = "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=1024&q=80"
@@ -225,7 +226,7 @@ class ToolService:
 
     async def _download_image_bytes(self, url: Optional[str]) -> bytes:
         if not url:
-            url = FALLBACK_TOOL_IMAGE
+            raise ValidationException("Image URL or image data is required.")
         if url.startswith("data:"):
             _, encoded = url.split(",", 1)
             raw = base64.b64decode(encoded)
@@ -249,13 +250,7 @@ class ToolService:
         except Exception as dl_err:
             logger.warning(f"[Tool: Image Fetch] Download notice: {dl_err}. Trying fallback.")
         
-        # Fallback to FALLBACK_TOOL_IMAGE if external url timed out or blocked
-        if url != FALLBACK_TOOL_IMAGE:
-            async with httpx.AsyncClient(timeout=10.0, headers=headers, follow_redirects=True) as client:
-                resp = await client.get(FALLBACK_TOOL_IMAGE)
-                if resp.status_code == 200:
-                    return self._normalize_image_orientation(resp.content)
-        raise ValueError(f"Failed to fetch image from {url}")
+        raise ValidationException(f"Failed to fetch image from {url[:80]}. Please verify the image file or URL.")
 
     async def _upload_to_supabase(self, image_bytes: bytes, folder: str = "tool_edits", ext: str = "png") -> Optional[str]:
         """Delegates upload to active IStorageProvider."""
@@ -321,8 +316,8 @@ class ToolService:
                 if resolved:
                     effective_url = resolved
 
-            if not effective_url:
-                effective_url = FALLBACK_TOOL_IMAGE
+            if not effective_url and not getattr(req, "image_base64", None):
+                raise ValidationException("Please provide a valid image to upscale.")
 
             input_bytes = await self._download_image_bytes(effective_url)
             output_bytes = await asyncio.to_thread(
@@ -357,22 +352,35 @@ class ToolService:
                 output_url=output_url,
                 image_url=output_url
             )
+        except AppException:
+            raise
         except Exception as e:
             logger.error(f"[Tool: Preset Transform] Failed: {e}", exc_info=True)
-            fallback_res = effective_url or FALLBACK_TOOL_IMAGE
-            return ToolPresetResponse(
-                task_id=task_id,
-                status="completed",
-                applied_tool=req.action,
-                subject_masked=req.lock_subject,
-                tokens_consumed=0,
-                output_url=fallback_res,
-                image_url=fallback_res
+            raise ValidationException(f"Failed to apply preset transform: {str(e)}")
+
+    @staticmethod
+    def _validate_subject(orig_pil: Image.Image, cutout_bytes: bytes, error_subject: str = "foreground subject") -> None:
+        orig_gray = np.array(orig_pil.convert("L"))
+        if np.std(orig_gray) < 8.0:
+            raise ValidationException(
+                f"No distinct {error_subject} found in this photo. Please upload a clear photo containing an identifiable object or product."
+            )
+
+        cutout_pil = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+        cutout_rgba = np.array(cutout_pil)
+        alpha = cutout_rgba[:, :, 3]
+        total = float(alpha.size)
+        fg_confident = np.sum(alpha > 180) / total if total > 0 else 0.0
+        if fg_confident < 0.01:
+            raise ValidationException(
+                f"No distinct {error_subject} detected in this photo. Please upload a clear photo containing an identifiable object or product."
             )
 
     async def remove_background(self, req: RemoveBackgroundRequest) -> RemoveBackgroundResponse:
         task_id = f"tool_rmbg_{uuid.uuid4().hex[:8]}"
-        target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        target_url = req.image_url or req.imageUrl
+        if not target_url and not getattr(req, "image_base64", None):
+            raise ValidationException("Please upload or provide an image to remove the background.")
         try:
             logger.info(f"[Tool: Background Removal] Processing: {target_url[:80]}...")
             if getattr(req, 'image_base64', None):
@@ -406,19 +414,11 @@ class ToolService:
                 tokens_consumed=0,
                 credits_deducted=0
             )
+        except AppException:
+            raise
         except Exception as e:
             logger.error(f"[Tool: Background Removal] Error: {e}", exc_info=True)
-            fallback_res = target_url
-            return RemoveBackgroundResponse(
-                task_id=task_id,
-                status="completed",
-                output_url=fallback_res,
-                cutout_url=fallback_res,
-                image_url=fallback_res,
-                url=fallback_res,
-                tokens_consumed=0,
-                credits_deducted=0
-            )
+            raise ValidationException(f"Failed to remove background: {str(e)}")
 
     def _upscale_image_cpu(self, input_bytes: bytes, scale: int, mode: str) -> tuple:
         input_bytes = self._normalize_image_orientation(input_bytes)
@@ -467,8 +467,8 @@ class ToolService:
                 if resolved:
                     effective_url = resolved
 
-            if not effective_url:
-                effective_url = FALLBACK_TOOL_IMAGE
+            if not effective_url and not getattr(req, "image_base64", None):
+                raise ValidationException("Please provide a valid image to upscale.")
             input_bytes = await self._download_image_bytes(effective_url)
             output_bytes, orig_res, upscaled_res = await self.upscaler_engine.upscale(
                 input_bytes,
@@ -510,24 +510,11 @@ class ToolService:
                 is_free=True,
                 engine=engine_label
             )
+        except AppException:
+            raise
         except Exception as e:
             logger.error(f"[Tool: Upscale] Failed: {e}", exc_info=True)
-            fallback_res = effective_url or FALLBACK_TOOL_IMAGE
-            return UpscaleResponse(
-                task_id=task_id,
-                status="completed",
-                scale=effective_scale,
-                mode=effective_mode,
-                original_resolution="1024x1024",
-                upscaled_resolution="2048x2048",
-                output_url=fallback_res,
-                image_url=fallback_res,
-                url=fallback_res,
-                tokens_consumed=0,
-                credits_deducted=0,
-                is_free=True,
-                engine="Optical Super-Resolution Fallback"
-            )
+            raise ValidationException(f"Failed to upscale image: {str(e)}")
 
 
 
@@ -700,7 +687,9 @@ class ToolService:
 
     async def execute_ai_background(self, req: AiBackgroundRequest) -> AiBackgroundResponse:
         task_id = f"tool_bg_{uuid.uuid4().hex[:8]}"
-        target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        target_url = req.image_url or req.imageUrl
+        if not target_url and not getattr(req, "image_base64", None):
+            raise ValidationException("Please upload or provide an image to generate an AI background.")
         try:
             logger.info(f"[Tool: AI Background] Mode: {req.mode} | Processing: {target_url[:80]}...")
             if getattr(req, 'image_base64', None):
@@ -719,6 +708,9 @@ class ToolService:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, session=session)
             else:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+
+            # Subject detection guard on cutout
+            self._validate_subject(orig_pil, cutout_bytes, "foreground subject")
 
             # 1b. Restore any internal holes so NO part of the object is removed
             cutout_pil = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
@@ -752,20 +744,11 @@ class ToolService:
                 credits_deducted=0,
                 is_free=True
             )
+        except AppException:
+            raise
         except Exception as e:
             logger.error(f"[Tool: AI Background] Failed: {e}", exc_info=True)
-            fallback_res = target_url
-            return AiBackgroundResponse(
-                task_id=task_id,
-                status="completed",
-                output_url=fallback_res,
-                image_url=fallback_res,
-                url=fallback_res,
-                mode=req.mode or "pure_white",
-                tokens_consumed=0,
-                credits_deducted=0,
-                is_free=True
-            )
+            raise ValidationException(f"Failed to generate AI background: {str(e)}")
 
     def _compute_alignment_offsets(
         self,
@@ -1041,7 +1024,9 @@ class ToolService:
 
     async def execute_ai_expand(self, req: AiExpandRequest) -> AiExpandResponse:
         task_id = f"tool_exp_{uuid.uuid4().hex[:8]}"
-        target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        target_url = req.image_url or req.imageUrl
+        if not target_url and not getattr(req, "image_base64", None):
+            raise ValidationException("Please upload or provide an image to expand.")
         target_ratio = req.target_ratio or "16:9"
         alignment = (req.alignment or "auto").lower().strip()
         engine = (req.engine or "diffusion").lower().strip()
@@ -1148,22 +1133,11 @@ class ToolService:
                 credits_deducted=0,
                 is_free=True
             )
+        except AppException:
+            raise
         except Exception as e:
             logger.error(f"[Tool: AI Expand] Failed: {e}", exc_info=True)
-            fallback_res = target_url
-            return AiExpandResponse(
-                task_id=task_id,
-                status="completed",
-                output_url=fallback_res,
-                image_url=fallback_res,
-                url=fallback_res,
-                target_ratio=target_ratio,
-                alignment=alignment,
-                engine=engine,
-                tokens_consumed=0,
-                credits_deducted=0,
-                is_free=True
-            )
+            raise ValidationException(f"Failed to expand canvas: {str(e)}")
 
     def _render_product_pedestal(self, cutout_bytes: bytes, product_name: str) -> bytes:
         cutout = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
@@ -1235,7 +1209,9 @@ class ToolService:
 
     async def execute_product_detail(self, req: ProductDetailRequest) -> ProductDetailResponse:
         task_id = f"tool_prod_{uuid.uuid4().hex[:8]}"
-        target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        target_url = req.image_url or req.imageUrl
+        if not target_url and not getattr(req, "image_base64", None):
+            raise ValidationException("Please upload or provide a product photo.")
         try:
             logger.info(f"[Tool: Product Detail] Name: {req.product_name} | Processing: {target_url[:80]}...")
             if getattr(req, 'image_base64', None):
@@ -1251,6 +1227,9 @@ class ToolService:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, session=session)
             else:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+
+            # Validate subject presence on product cutout
+            self._validate_subject(orig_pil, cutout_bytes, "product")
 
             # Restore internal holes so no product details are erased
             cutout_pil = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
@@ -1281,20 +1260,11 @@ class ToolService:
                 credits_deducted=0,
                 is_free=True
             )
+        except AppException:
+            raise
         except Exception as e:
             logger.error(f"[Tool: Product Detail] Failed: {e}", exc_info=True)
-            fallback_res = target_url
-            return ProductDetailResponse(
-                task_id=task_id,
-                status="completed",
-                output_url=fallback_res,
-                image_url=fallback_res,
-                url=fallback_res,
-                product_name=req.product_name or "Commercial Product",
-                tokens_consumed=0,
-                credits_deducted=0,
-                is_free=True
-            )
+            raise ValidationException(f"Failed to generate product details: {str(e)}")
 
     def _render_amazon_pure_white(self, cutout_bytes: bytes) -> bytes:
         cutout = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
@@ -1402,7 +1372,9 @@ class ToolService:
         4. Social Story Flyer (9:16 Instagram/TikTok promotional asset)
         """
         task_id = f"tool_pack_{uuid.uuid4().hex[:8]}"
-        target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        target_url = req.image_url or req.imageUrl
+        if not target_url and not getattr(req, "image_base64", None):
+            raise ValidationException("Please upload or provide a product photo.")
         try:
             logger.info(f"[Tool: Product Pack] Name: {req.product_name} | Processing: {target_url[:80]}...")
             if getattr(req, 'image_base64', None):
@@ -1419,6 +1391,9 @@ class ToolService:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, session=session)
             else:
                 cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+
+            # Subject detection guard for product pack
+            self._validate_subject(orig_pil, cutout_bytes, "product")
 
             # 1b. Restore object internal holes
             cutout_pil = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
@@ -1604,24 +1579,17 @@ class ToolService:
                 credits_deducted=0,
                 is_free=True
             )
+        except AppException:
+            raise
         except Exception as e:
             logger.error(f"[Tool: Marketing Poster] Failed: {e}", exc_info=True)
-            fallback_res = target_url or FALLBACK_TOOL_IMAGE
-            return MarketingPosterResponse(
-                task_id=task_id,
-                status="completed",
-                output_url=fallback_res,
-                image_url=fallback_res,
-                url=fallback_res,
-                topic=req.headline or req.topic or "Promotion",
-                tokens_consumed=0,
-                credits_deducted=0,
-                is_free=True
-            )
+            raise ValidationException(f"Failed to generate marketing poster: {str(e)}")
 
     async def remove_object(self, req: RemoveObjectRequest) -> RemoveObjectResponse:
         task_id = f"tool_erase_{uuid.uuid4().hex[:8]}"
-        target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        target_url = req.image_url or req.imageUrl
+        if not target_url and not getattr(req, "image_base64", None):
+            raise ValidationException("Please upload or provide an image to erase an object from.")
         mask_target = req.mask_url or req.maskUrl
         try:
             logger.info(f"[Tool: Object Eraser] Inpainting target: {target_url[:80]}...")
@@ -1637,14 +1605,7 @@ class ToolService:
             elif mask_target:
                 mask_bytes = await self._download_image_bytes(mask_target)
             else:
-                import cv2
-                np_img = np.frombuffer(image_bytes, np.uint8)
-                decoded = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
-                h, w = decoded.shape[:2]
-                default_mask = np.zeros((h, w), dtype=np.uint8)
-                cv2.circle(default_mask, (w // 2, h // 2), min(h, w) // 6, 255, -1)
-                _, enc_mask = cv2.imencode(".png", default_mask)
-                mask_bytes = enc_mask.tobytes()
+                raise ValidationException("No object area was selected. Please brush over the object you want to erase.")
 
             output_bytes, elapsed_ms = await self.inpaint_engine.inpaint(
                 image_bytes,
@@ -1676,19 +1637,11 @@ class ToolService:
                 latency_ms=elapsed_ms,
                 is_free=True
             )
+        except AppException:
+            raise
         except Exception as e:
             logger.error(f"[Tool: Object Eraser] Failed: {e}", exc_info=True)
-            fallback_res = target_url
-            return RemoveObjectResponse(
-                task_id=task_id,
-                status="completed",
-                output_url=fallback_res,
-                image_url=fallback_res,
-                url=fallback_res,
-                tokens_consumed=0,
-                credits_deducted=0,
-                is_free=True
-            )
+            raise ValidationException(f"Failed to erase object: {str(e)}")
 
     async def execute_magic_grab(self, req: MagicGrabRequest) -> MagicGrabResponse:
         """
@@ -1697,7 +1650,9 @@ class ToolService:
         the background plate with LaMa. Enables interactive moving/repositioning on mobile.
         """
         task_id = f"tool_grab_{uuid.uuid4().hex[:8]}"
-        target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        target_url = req.image_url or req.imageUrl
+        if not target_url and not getattr(req, "image_base64", None):
+            raise ValidationException("Please upload or provide an image for Magic Grab.")
         mask_target = req.mask_url or req.maskUrl
         try:
             logger.info(f"[Tool: Magic Grab] Lifting subject: {target_url[:80]}...")
@@ -1713,7 +1668,7 @@ class ToolService:
             elif mask_target:
                 mask_bytes = await self._download_image_bytes(mask_target)
             else:
-                raise ValueError("Mask required for Magic Grab")
+                raise ValidationException("No subject was selected. Please brush over the subject you want to lift and move.")
 
             # 1. Neural Inpainting: Generate clean infilled background plate
             clean_bg_bytes, elapsed_ms = await self.inpaint_engine.inpaint(image_bytes, mask_bytes)
@@ -1785,7 +1740,9 @@ class ToolService:
 
     async def colorize_image(self, req: ColorizeRequest) -> ColorizeResponse:
         task_id = f"tool_color_{uuid.uuid4().hex[:8]}"
-        target_url = req.image_url or req.imageUrl or FALLBACK_TOOL_IMAGE
+        target_url = req.image_url or req.imageUrl
+        if not target_url and not getattr(req, "image_base64", None):
+            raise ValidationException("Please upload or provide a photo to colorize.")
         try:
             logger.info(f"[Tool: Colorize] Restoring color for: {target_url[:80]}...")
             if req.image_base64:
@@ -1824,16 +1781,8 @@ class ToolService:
                 latency_ms=elapsed_ms,
                 is_free=True
             )
+        except AppException:
+            raise
         except Exception as e:
             logger.error(f"[Tool: Colorize] Failed: {e}", exc_info=True)
-            fallback_res = target_url
-            return ColorizeResponse(
-                task_id=task_id,
-                status="completed",
-                output_url=fallback_res,
-                image_url=fallback_res,
-                url=fallback_res,
-                tokens_consumed=0,
-                credits_deducted=0,
-                is_free=True
-            )
+            raise ValidationException(f"Failed to colorize photo: {str(e)}")
