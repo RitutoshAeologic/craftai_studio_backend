@@ -6,6 +6,7 @@ from app.schemas.generation import GenerationDispatchRequest, GenerationDispatch
 from app.services.privacy_service import PrivacyService
 from app.core.auth import get_current_user
 from app.services.config_service import ConfigService
+from app.core.supabase_client import get_supabase_admin
 from app.core.logging import logger
 
 router = APIRouter(tags=["Generation & Progress"])
