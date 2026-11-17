@@ -154,7 +154,20 @@ async def get_collection_items(
             .eq("collection_id", collection_id)\
             .order("created_at", desc=True)\
             .execute()
-        if res.data is not None:
+        if res.data and len(res.data) > 0:
+            return CollectionItemListResponse(
+                collection_id=collection_id,
+                total=len(res.data),
+                items=res.data
+            )
+        elif collection_id in _MOCK_ITEMS and len(_MOCK_ITEMS[collection_id]) > 0:
+            items = _MOCK_ITEMS.get(collection_id, [])
+            return CollectionItemListResponse(
+                collection_id=collection_id,
+                total=len(items),
+                items=items
+            )
+        elif res.data is not None:
             return CollectionItemListResponse(
                 collection_id=collection_id,
                 total=len(res.data),
