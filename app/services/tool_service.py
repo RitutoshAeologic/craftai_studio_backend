@@ -700,12 +700,36 @@ class ToolService:
             orig_pil = Image.open(io.BytesIO(input_bytes)).convert("RGB")
             self._validate_image_has_subject(orig_pil, "foreground subject")
 
-            # 1. Background removal cutout with SOTA BiRefNet
+            # Smart multi-scale inference for CPU performance
+            orig_w, orig_h = orig_pil.size
+            if max(orig_w, orig_h) > 1024:
+                scale = 1024.0 / float(max(orig_w, orig_h))
+                infer_w = max(64, int(orig_w * scale))
+                infer_h = max(64, int(orig_h * scale))
+                infer_pil = orig_pil.resize((infer_w, infer_h), Image.Resampling.BILINEAR)
+                infer_buf = io.BytesIO()
+                infer_pil.save(infer_buf, format="PNG")
+                infer_bytes = infer_buf.getvalue()
+                is_downscaled = True
+            else:
+                infer_bytes = input_bytes
+                is_downscaled = False
+
+            # 1. Background removal cutout
             session = self._get_rembg_session()
             if session:
-                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, session=session)
+                cutout_bytes = await asyncio.to_thread(rembg.remove, infer_bytes, session=session)
             else:
-                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+                cutout_bytes = await asyncio.to_thread(rembg.remove, infer_bytes)
+
+            if is_downscaled:
+                cutout_pil = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+                alpha_mask = cutout_pil.split()[3].resize((orig_w, orig_h), Image.Resampling.BILINEAR)
+                full_rgba = orig_pil.convert("RGBA")
+                full_rgba.putalpha(alpha_mask)
+                buf = io.BytesIO()
+                full_rgba.save(buf, format="PNG")
+                cutout_bytes = buf.getvalue()
 
             # Subject detection guard on cutout
             self._validate_subject(orig_pil, cutout_bytes, "foreground subject")
@@ -795,8 +819,19 @@ class ToolService:
         try:
             session = self._get_rembg_session()
             if session:
+                orig_w, orig_h = img.size
+                max_dim = max(orig_w, orig_h)
+                if max_dim > 512:
+                    scale = 512.0 / max_dim
+                    infer_w = max(64, int(orig_w * scale))
+                    infer_h = max(64, int(orig_h * scale))
+                    proc_img = img.resize((infer_w, infer_h), Image.Resampling.BILINEAR)
+                else:
+                    scale = 1.0
+                    proc_img = img
+
                 img_io = io.BytesIO()
-                img.save(img_io, format="PNG")
+                proc_img.save(img_io, format="PNG")
                 cutout_bytes = await asyncio.to_thread(rembg.remove, img_io.getvalue(), session=session)
                 cutout = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
                 alpha = np.array(cutout)[:, :, 3]
@@ -806,6 +841,9 @@ class ToolService:
                     if contours:
                         largest = max(contours, key=cv2.contourArea)
                         x, y, w_box, h_box = cv2.boundingRect(largest)
+                        if scale != 1.0:
+                            inv = 1.0 / scale
+                            return (int(x * inv), int(y * inv), int((x + w_box) * inv), int((y + h_box) * inv))
                         return (x, y, x + w_box, y + h_box)
         except Exception as e:
             logger.debug(f"[Tool: AI Expand] Saliency detection skipped: {e}")
@@ -1220,12 +1258,36 @@ class ToolService:
             orig_pil = Image.open(io.BytesIO(input_bytes)).convert("RGB")
             self._validate_image_has_subject(orig_pil, "product")
 
+            # Smart multi-scale inference for CPU performance
+            orig_w, orig_h = orig_pil.size
+            if max(orig_w, orig_h) > 1024:
+                scale = 1024.0 / float(max(orig_w, orig_h))
+                infer_w = max(64, int(orig_w * scale))
+                infer_h = max(64, int(orig_h * scale))
+                infer_pil = orig_pil.resize((infer_w, infer_h), Image.Resampling.BILINEAR)
+                infer_buf = io.BytesIO()
+                infer_pil.save(infer_buf, format="PNG")
+                infer_bytes = infer_buf.getvalue()
+                is_downscaled = True
+            else:
+                infer_bytes = input_bytes
+                is_downscaled = False
+
             # Background removal cutout
             session = self._get_rembg_session()
             if session:
-                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, session=session)
+                cutout_bytes = await asyncio.to_thread(rembg.remove, infer_bytes, session=session)
             else:
-                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+                cutout_bytes = await asyncio.to_thread(rembg.remove, infer_bytes)
+
+            if is_downscaled:
+                cutout_pil = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+                alpha_mask = cutout_pil.split()[3].resize((orig_w, orig_h), Image.Resampling.BILINEAR)
+                full_rgba = orig_pil.convert("RGBA")
+                full_rgba.putalpha(alpha_mask)
+                buf = io.BytesIO()
+                full_rgba.save(buf, format="PNG")
+                cutout_bytes = buf.getvalue()
 
             # Validate subject presence on product cutout
             self._validate_subject(orig_pil, cutout_bytes, "product")
@@ -1383,13 +1445,38 @@ class ToolService:
                 input_bytes = await self._download_image_bytes(target_url)
 
             orig_pil = Image.open(io.BytesIO(input_bytes)).convert("RGB")
+            self._validate_image_has_subject(orig_pil, "product")
+
+            # Smart multi-scale inference for CPU performance
+            orig_w, orig_h = orig_pil.size
+            if max(orig_w, orig_h) > 1024:
+                scale = 1024.0 / float(max(orig_w, orig_h))
+                infer_w = max(64, int(orig_w * scale))
+                infer_h = max(64, int(orig_h * scale))
+                infer_pil = orig_pil.resize((infer_w, infer_h), Image.Resampling.BILINEAR)
+                infer_buf = io.BytesIO()
+                infer_pil.save(infer_buf, format="PNG")
+                infer_bytes = infer_buf.getvalue()
+                is_downscaled = True
+            else:
+                infer_bytes = input_bytes
+                is_downscaled = False
 
             # 1. Background removal cutout
             session = self._get_rembg_session()
             if session:
-                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes, session=session)
+                cutout_bytes = await asyncio.to_thread(rembg.remove, infer_bytes, session=session)
             else:
-                cutout_bytes = await asyncio.to_thread(rembg.remove, input_bytes)
+                cutout_bytes = await asyncio.to_thread(rembg.remove, infer_bytes)
+
+            if is_downscaled:
+                cutout_pil = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+                alpha_mask = cutout_pil.split()[3].resize((orig_w, orig_h), Image.Resampling.BILINEAR)
+                full_rgba = orig_pil.convert("RGBA")
+                full_rgba.putalpha(alpha_mask)
+                buf = io.BytesIO()
+                full_rgba.save(buf, format="PNG")
+                cutout_bytes = buf.getvalue()
 
             # Subject detection guard for product pack
             self._validate_subject(orig_pil, cutout_bytes, "product")
