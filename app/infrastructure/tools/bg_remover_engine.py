@@ -22,19 +22,13 @@ class LocalRembgEngine(IBackgroundRemoverEngine):
 
     def _get_session(self):
         if self._session is None:
-            for model_name in ["birefnet-general-lite", "isnet-general-use", "u2net"]:
+            for model_name in ["u2netp", "u2net", "isnet-general-use"]:
                 try:
                     self._session = rembg.new_session(model_name)
                     logger.info(f"[Rembg Engine] Loaded {model_name} session successfully")
                     break
                 except Exception as e:
                     logger.warning(f"[Rembg Engine] Model {model_name} load notice: {e}")
-            if self._session is None:
-                try:
-                    self._session = rembg.new_session("u2netp")
-                except Exception as e2:
-                    logger.error(f"[Rembg Engine] Could not load rembg session: {e2}")
-                    self._session = None
         return self._session
 
     @staticmethod
@@ -97,11 +91,27 @@ class LocalRembgEngine(IBackgroundRemoverEngine):
                 "No distinct foreground subject found in this photo. Please upload a photo with a clear person, product, or distinct object."
             )
 
+        orig_w, orig_h = orig_pil.size
+        MAX_INFER_DIM = 1024
+        is_downscaled = False
+
+        if max(orig_w, orig_h) > MAX_INFER_DIM:
+            scale = MAX_INFER_DIM / float(max(orig_w, orig_h))
+            infer_w = max(64, int(orig_w * scale))
+            infer_h = max(64, int(orig_h * scale))
+            infer_pil = orig_pil.resize((infer_w, infer_h), Image.Resampling.BILINEAR)
+            infer_buf = io.BytesIO()
+            infer_pil.save(infer_buf, format="PNG")
+            infer_bytes = infer_buf.getvalue()
+            is_downscaled = True
+        else:
+            infer_bytes = norm_bytes
+
         session = self._get_session()
         if session:
-            cutout_bytes = await asyncio.to_thread(rembg.remove, norm_bytes, session=session)
+            cutout_bytes = await asyncio.to_thread(rembg.remove, infer_bytes, session=session)
         else:
-            cutout_bytes = await asyncio.to_thread(rembg.remove, norm_bytes)
+            cutout_bytes = await asyncio.to_thread(rembg.remove, infer_bytes)
 
         # 2. Multi-threshold confidence validation on neural alpha mask
         cutout_pil = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
@@ -121,7 +131,18 @@ class LocalRembgEngine(IBackgroundRemoverEngine):
                 "No background detected to remove in this photo. The subject appears to fill the entire canvas."
             )
 
-        return self._restore_internal_holes(cutout_bytes, orig_pil)
+        if is_downscaled:
+            alpha_mask = cutout_pil.split()[3]
+            highres_alpha = alpha_mask.resize((orig_w, orig_h), Image.Resampling.BILINEAR)
+            full_rgba = orig_pil.convert("RGBA")
+            full_rgba.putalpha(highres_alpha)
+            out_buf = io.BytesIO()
+            full_rgba.save(out_buf, format="PNG")
+            final_cutout_bytes = out_buf.getvalue()
+        else:
+            final_cutout_bytes = cutout_bytes
+
+        return self._restore_internal_holes(final_cutout_bytes, orig_pil)
 
 class FalBiRefNetEngine(IBackgroundRemoverEngine):
     """

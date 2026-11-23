@@ -107,20 +107,13 @@ class ToolService:
 
     def _get_rembg_session(self):
         if self._rembg_session is None:
-            # SOTA priority: birefnet-general-lite -> isnet-general-use -> u2net -> u2netp
-            for model_name in ["birefnet-general-lite", "isnet-general-use", "u2net"]:
+            for model_name in ["u2netp", "u2net", "isnet-general-use"]:
                 try:
                     self._rembg_session = rembg.new_session(model_name)
                     logger.info(f"[Tool: Background Removal] Loaded {model_name} session")
                     break
                 except Exception as e:
                     logger.warning(f"[Tool: Background Removal] Model {model_name} load notice: {e}")
-            if self._rembg_session is None:
-                try:
-                    self._rembg_session = rembg.new_session("u2netp")
-                except Exception as e2:
-                    logger.error(f"[Tool: Background Removal] Could not load rembg session: {e2}")
-                    self._rembg_session = None
         return self._rembg_session
 
     @staticmethod
@@ -359,12 +352,16 @@ class ToolService:
             raise ValidationException(f"Failed to apply preset transform: {str(e)}")
 
     @staticmethod
-    def _validate_subject(orig_pil: Image.Image, cutout_bytes: bytes, error_subject: str = "foreground subject") -> None:
+    def _validate_image_has_subject(orig_pil: Image.Image, error_subject: str = "foreground subject") -> None:
         orig_gray = np.array(orig_pil.convert("L"))
         if np.std(orig_gray) < 8.0:
             raise ValidationException(
                 f"No distinct {error_subject} found in this photo. Please upload a clear photo containing an identifiable object or product."
             )
+
+    @staticmethod
+    def _validate_subject(orig_pil: Image.Image, cutout_bytes: bytes, error_subject: str = "foreground subject") -> None:
+        ToolService._validate_image_has_subject(orig_pil, error_subject)
 
         cutout_pil = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
         cutout_rgba = np.array(cutout_pil)
@@ -701,6 +698,7 @@ class ToolService:
             # Ensure orientation is upright
             input_bytes = self._normalize_image_orientation(input_bytes)
             orig_pil = Image.open(io.BytesIO(input_bytes)).convert("RGB")
+            self._validate_image_has_subject(orig_pil, "foreground subject")
 
             # 1. Background removal cutout with SOTA BiRefNet
             session = self._get_rembg_session()
@@ -1220,6 +1218,7 @@ class ToolService:
             else:
                 input_bytes = await self._download_image_bytes(target_url)
             orig_pil = Image.open(io.BytesIO(input_bytes)).convert("RGB")
+            self._validate_image_has_subject(orig_pil, "product")
 
             # Background removal cutout
             session = self._get_rembg_session()
