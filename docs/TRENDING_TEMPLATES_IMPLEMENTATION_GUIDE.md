@@ -260,3 +260,4 @@ The Web client implements exact functional parity with the mobile app:
 | **Studio "Use as Prompt"** | Prompt bar in Studio fills with the template's creative prompt and sets creator attribution. | Verified |
 | **Studio "⚡ Remix on My Photo"** | Prompts device gallery picker, attaches photo, and applies Subject-Lock prefix. | Verified |
 | **Offline Fallback** | When network is unreachable, local seed templates render instantly without blank screens. | Verified |
+
