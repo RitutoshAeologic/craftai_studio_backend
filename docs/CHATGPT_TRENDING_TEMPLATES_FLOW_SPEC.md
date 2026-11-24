@@ -410,16 +410,17 @@ ON CONFLICT (id) DO UPDATE SET
 │    MOBILE DEVELOPER OWNED    │       WEB TEAM OWNED         │
 ├──────────────────────────────┼──────────────────────────────┤
 │• Floating Icon (FAB Menu)    │• Left Sidebar Navigation     │
-│• TrendingTemplatesPickerSheet│• Trending Drawer on Web      │
+│• TrendingTemplatesView (Full)│• Trending Drawer on Web      │
 │• TemplatePhotoRemixSheet     │• Camera / Drag-Drop Web Uploader
 │• Camera/Gallery Picker Native│• Face-Lock Web Studio Router │
 │• StudioController Handover   │• Independent Desktop UI Parity│
 └──────────────────────────────┴──────────────────────────────┘
 ```
 
-> **Note for Mobile Developer:**  
-> Web side implementation will be managed by the Web team as a Sidebar item in Next.js (`craftai_studio_web`).  
-> **Your sole focus is the Mobile App (`craftai_studio_mobile`) flow described below.**
+> **Note on Mobile UX Requirement:**  
+> User tap karne par **Trending bottom sheet nahi khulegi, balki FULL-SCREEN Page (`TrendingTemplatesView`) open hoga.**  
+> Is full-screen page par user ko saare trending templates, search bar, aur category filter chips dikhenge.  
+> Jab user kisi template card par tap karega, **tab bottom sheet (`TemplatePhotoRemixBottomSheet`)** open hogi jisme reference image aur Camera/Gallery upload options honge.
 
 ---
 
@@ -429,19 +430,21 @@ Humne mobile codebase mein foundation layer pehle hi tayyar kar di hai taaki koi
 
 | File | Status | What Was Added / Modified |
 | :--- | :--- | :--- |
-| `lib/data/models/explore_card_model.dart` | ✅ **Already Done** | Added `tags` (`List<String>`), `isTrending` (`bool`), and safe multi-alias fallback for `previewUrl` & `fullPrompt`. *(Do not re-edit)* |
-| `lib/features/studio/presentation/controllers/studio_controller.dart` | ✅ **Ready to Plug** | `loadPromptFromRemix` & `remixOnMyPhoto` now support unmasked prompts. Added support for `remixedFromPromptId`. |
+| `lib/features/explore/views/trending_templates_view.dart` | ✅ **Already Implemented & Analyzed** | Full-screen discovery view with Search bar, Category filter chips, 2-column grid, and smooth remix trigger. |
+| `lib/features/explore/widgets/template_photo_remix_bottom_sheet.dart` | ✅ **Already Implemented** | Bottom sheet with reference image, camera & gallery picking, and direct Studio handover. |
+| `lib/data/models/explore_card_model.dart` | ✅ **Already Done** | Added `tags` (`List<String>`), `isTrending` (`bool`), `remixesCount` alias, and safe multi-alias fallback for `previewUrl` & `fullPrompt`. *(Do not re-edit)* |
+| `lib/features/studio/presentation/controllers/studio_controller.dart` | ✅ **Ready to Plug** | `loadPromptFromRemix` & `startTemplateRemixGeneration` handle reference image face-locking and auto-generation. |
 | `lib/core/utils/permission_helper.dart` | ✅ **Already Done** | `AppPermissionHelper.pickImageSafely()` handles Camera and Gallery permissions with Settings redirect. |
 
 ---
 
 ## 4. Mobile Developer Work Items (What to Implement)
 
-Mobile developer ko sirf ye **4 simple, clean steps** implement karne hain:
+Mobile developer ko sirf ye **4 simple, clean steps** follow karne hain:
 
 ```
-Step 1: FAB Menu Item  ──>  Step 2: Templates Picker Sheet  ──>  Step 3: Photo Remix Sheet  ──>  Step 4: Auto-Generate Handover
-(home_shell_view.dart)      (trending_templates_picker_sheet)    (template_photo_remix_bottom)   (studio_controller.dart)
+Step 1: FAB Menu Item  ──>  Step 2: Full-Screen Templates View  ──>  Step 3: Photo Remix Bottom Sheet  ──>  Step 4: Auto-Generate Handover
+(home_shell_view.dart)      (trending_templates_view.dart)            (template_photo_remix_bottom)       (studio_controller.dart)
 ```
 
 ---
@@ -450,10 +453,10 @@ Step 1: FAB Menu Item  ──>  Step 2: Templates Picker Sheet  ──>  Step 3:
 
 File: `lib/features/shell/views/home_shell_view.dart` (around line 265)
 
-Add `FabMenuItem` for **Trending & Templates** to `ExpandableNavigationFab`:
+Add `FabMenuItem` for **Trending & Templates** to `ExpandableNavigationFab` that navigates to **Full Screen** `TrendingTemplatesView`:
 
 ```dart
-import '../../explore/widgets/trending_templates_picker_sheet.dart';
+import '../../explore/views/trending_templates_view.dart';
 
 // Inside ExpandableNavigationFab items list:
 FabMenuItem(
@@ -463,61 +466,48 @@ FabMenuItem(
   accentColor: const Color(0xFFEF4444),
   onTap: () {
     HapticFeedback.lightImpact();
-    TrendingTemplatesPickerSheet.show(context);
+    Get.to(
+      () => const TrendingTemplatesView(),
+      transition: Transition.cupertino,
+    );
   },
 ),
 ```
 
 ---
 
-### Step 2: Create `TrendingTemplatesPickerSheet.dart`
+### Step 2: Full-Screen Trending & Templates View (`trending_templates_view.dart`)
 
-New File: `lib/features/explore/widgets/trending_templates_picker_sheet.dart`
+File: `lib/features/explore/views/trending_templates_view.dart`
 
-This sheet displays the grid of trending cards with:
-1. High-aesthetic Image Preview
-2. **Title Clearly Mentioned on the Card** (e.g. *Cyberpunk Neo-Tokyo Rain*)
-3. Style / Category Pill
-4. Tapping a card opens the Photo Remix Bottom Sheet.
+This full-screen screen displays the complete catalog of trending templates with:
+1. Top AppBar with Back Button, Flame Icon & Refresh action.
+2. Search input field to search templates by title, keywords, or prompt description.
+3. Horizontally scrollable Category Filter Chips (`All`, `Cyberpunk`, `Photorealism`, `Anime`, `Architecture`, `Wildlife`, `Concept Art`, `Surrealism`, `Commercial`).
+4. 2-column Grid displaying:
+   - High-fidelity visual preview image
+   - Category pill & Remix count badge
+   - Template title clearly displayed
+   - One-tap "Remix My Photo" CTA button
+5. **Tapping any card opens the Photo Remix Bottom Sheet** (`TemplatePhotoRemixBottomSheet.show(context, card)`).
 
+---
+
+### Step 3: Photo Remix Bottom Sheet (`template_photo_remix_bottom_sheet.dart`)
+
+File: `lib/features/explore/widgets/template_photo_remix_bottom_sheet.dart`
+
+Jab user full-screen page par kisi card par tap karta hai, tab ye bottom sheet slide up hoti hai:
+- Reference template image preview aur title
+- **Take Photo / Camera** option
+- **Upload Photo / Gallery** option
+- Photo select hone par bottom sheet dismiss hoti hai aur seedha generation handover call hota hai:
 ```dart
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:cached_network_image/cached_network_image.dart';
-import 'package:get/get.dart';
-import 'package:craftai_studio_mobile/core/constants/app_colors.dart';
-import 'package:craftai_studio_mobile/core/constants/app_dimens.dart';
-import 'package:craftai_studio_mobile/core/constants/app_text_styles.dart';
-import 'package:craftai_studio_mobile/data/models/explore_card_model.dart';
-import 'package:craftai_studio_mobile/features/explore/controllers/explore_controller.dart';
-import 'template_photo_remix_bottom_sheet.dart';
-
-class TrendingTemplatesPickerSheet extends StatelessWidget {
-  const TrendingTemplatesPickerSheet({super.key});
-
-  static void show(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const TrendingTemplatesPickerSheet(),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final ExploreController exploreCtrl = Get.find<ExploreController>();
-
-    return Container(
-      constraints: BoxConstraints(maxHeight: 0.88.sh),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppDimens.radiusXl)),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        children: [
+await studioCtrl.startTemplateRemixGeneration(
+  template: template,
+  userPhoto: File(pickedFile.path),
+);
+```
           // Drag Handle
           Center(
             child: Container(
