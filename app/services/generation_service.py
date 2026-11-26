@@ -1,6 +1,8 @@
 import os
 import re
 import uuid
+import ipaddress
+from urllib.parse import urlparse
 import httpx
 from typing import List, Dict, Any, Optional
 from app.infrastructure.clients.base import IDiffusionGateway, IDiffusionEngine, IVisionClient, IFaceLockEngine, ICloudDiffusionEngine
@@ -10,8 +12,10 @@ from app.infrastructure.storage.storage_provider import IStorageProvider, Storag
 from app.infrastructure.clients.gemini_client import GeminiVisionClient
 from app.infrastructure.clients.huggingface_client import HuggingFaceClient
 from app.infrastructure.clients.diffusion_engine import CompositeDiffusionEngine
+from fastapi import HTTPException
 from app.infrastructure.clients.cloudflare_client import CloudflareAIClient
 from app.infrastructure.clients.local_diffusion_client import LocalDiffusionClient
+from app.infrastructure.clients.provider_registry import ModelRouter, ModelUnavailableError
 from app.infrastructure.storage.task_store import ITaskStore
 from app.schemas.generation import GenerationDispatchRequest, GenerationDispatchResponse, GenerationStatusResponse
 from app.services.wallet_service import IWalletService, SupabaseWalletService
@@ -32,7 +36,8 @@ class GenerationService:
         cloud_diffusion: Optional[ICloudDiffusionEngine] = None,
         storage_provider: Optional[IStorageProvider] = None,
         cloudflare_client: Optional[CloudflareAIClient] = None,
-        local_diffusion: Optional[LocalDiffusionClient] = None
+        local_diffusion: Optional[LocalDiffusionClient] = None,
+        model_router: Optional[ModelRouter] = None
     ):
         self.diffusion_gateway = diffusion_gateway
         self.task_store = task_store
@@ -45,6 +50,7 @@ class GenerationService:
         self.storage_provider = storage_provider or StorageFactory.get_storage_provider()
         self.cloudflare_client = cloudflare_client or CloudflareAIClient()
         self.local_diffusion = local_diffusion or LocalDiffusionClient()
+        self.model_router = model_router or ModelRouter()
 
     async def _upload_to_supabase_storage(self, image_bytes: bytes, file_prefix: str = "gen") -> Optional[str]:
         """Delegates asset upload to active IStorageProvider."""
@@ -126,31 +132,79 @@ class GenerationService:
 
     async def dispatch(self, req: GenerationDispatchRequest, user_id: Optional[str] = None) -> GenerationDispatchResponse:
         task_id = req.task_id if req.task_id else f"gen_{os.urandom(4).hex()}"
-        
-        # Harmonize Mobile & Web Remix parameters:
-        # If remixed_from_prompt_id is set without character_id, anchor the artwork style rather than forcing facial lock
+
+        def _is_safe_external_url(url: Optional[str]) -> bool:
+            if not url:
+                return False
+            try:
+                parsed = urlparse(url.strip())
+                if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                    return False
+                host = parsed.hostname.lower()
+                if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1") or host.endswith(".local"):
+                    return False
+                try:
+                    ip = ipaddress.ip_address(host)
+                    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                        return False
+                except ValueError:
+                    pass  # Domain name, not raw IP
+                return True
+            except Exception:
+                return False
+
+        # Preserve Selfie Face-Lock on Trending Remix; only treat as style-anchor if explicitly style_only
         if req.remixed_from_prompt_id and not req.anchor_image_url and req.face_reference_urls:
-            req.anchor_image_url = req.face_reference_urls[0]
-            if not req.character_id:
+            is_style_only = bool((req.structured_metadata or {}).get("style_only"))
+            if is_style_only:
+                req.anchor_image_url = req.face_reference_urls[0]
                 req.face_reference_urls = None
 
         has_face_lock = bool(req.face_reference_urls and len(req.face_reference_urls) > 0) or bool(req.character_id)
-        cost = 3.0 if has_face_lock else 2.0
+        ref_url = req.face_reference_urls[0] if (req.face_reference_urls and len(req.face_reference_urls) > 0) else None
+        is_edit_request = bool(req.edit_instruction) or (
+            ref_url and ("seamless modification into" in req.prompt.lower() or "generations/" in ref_url)
+        )
+        resolved_task = "image_edit" if (is_edit_request and ref_url) else ("face_lock_remix" if (has_face_lock and ref_url) else "text_to_image")
 
-        if user_id:
-            await self.wallet_service.deduct_credits(
-                user_id=user_id,
-                amount=cost,
-                task_id=task_id,
-                reason="image_generation"
+        # 1. Resolve model BEFORE deducting credits so invalid/unavailable models never charge the user
+        try:
+            resolved_model_cfg, is_fallback_used = self.model_router.resolve_model(
+                requested_model=req.model,
+                task=resolved_task,
+                quality=req.quality or "standard",
             )
+        except ModelUnavailableError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        active_provider_key = (resolved_model_cfg.get("provider_key") or "local").lower()
+        active_model_key = resolved_model_cfg.get("model_key") or "local_sdxl"
+        cost = float(resolved_model_cfg.get("credit_cost") or (3.0 if has_face_lock else 2.0))
+
+        # 2. Reserve credits atomically & enforce insufficient-balance rejection
+        if user_id:
+            if hasattr(self.wallet_service, "reserve_credits"):
+                wallet_res = await self.wallet_service.reserve_credits(
+                    user_id=user_id,
+                    amount=cost,
+                    task_id=task_id,
+                    idempotency_key=req.idempotency_key,
+                )
+            else:
+                wallet_res = await self.wallet_service.deduct_credits(
+                    user_id=user_id,
+                    amount=cost,
+                    task_id=task_id,
+                    reason="image_generation",
+                )
+            if not wallet_res.get("success", True):
+                raise HTTPException(status_code=402, detail=wallet_res.get("error", "Insufficient credits"))
+
         effective_prompt = self._optimize_prompt_for_diffusion(req.prompt)
 
         # ── 1. Multimodal Facial Identity Conditioning ────────────────────────
         extracted_face_tokens = None
-        ref_url = None
-        if req.face_reference_urls and len(req.face_reference_urls) > 0:
-            ref_url = req.face_reference_urls[0]
+        if ref_url and _is_safe_external_url(ref_url):
             try:
                 logger.info(f"[Face-Lock] Downloading reference selfie for facial conditioning: {ref_url}")
                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -164,6 +218,9 @@ class GenerationService:
                         logger.warning(f"[Face-Lock] Reference photo download returned HTTP {img_resp.status_code}")
             except Exception as e:
                 logger.error(f"[Face-Lock] Error extracting facial identity: {e}")
+        elif ref_url:
+            logger.warning(f"[SSRF Guard] Blocked unsafe reference URL: {ref_url}")
+            ref_url = None
 
         if extracted_face_tokens:
             cleaned = re.sub(r'^(using\s+(my\s+)?(uploaded\s+)?photo(\s*,)?\s*)', '', effective_prompt, flags=re.IGNORECASE)
@@ -184,12 +241,36 @@ class GenerationService:
         tier_label = "Tier 0 (SDXL-Lightning RealVisXL Engine)" if is_sdxl else "Tier 0 (FLUX.1-schnell via Cloudflare Workers AI)"
 
         # Determine if this is an image modification/refinement request on an active image
-        is_edit_request = bool(req.edit_instruction) or (
-            ref_url and ("seamless modification into" in req.prompt.lower() or "generations/" in ref_url)
-        )
         edit_prompt = req.edit_instruction or req.prompt
         if "seamless modification into:" in edit_prompt.lower():
             edit_prompt = edit_prompt.split("seamless modification into:")[-1].strip()
+
+        gateway_result = None
+
+        # 2.0 Dynamic Paid Gateway Execution (runs automatically when Supabase has an API key for fal/openai/google)
+        if active_provider_key in ("fal", "openai", "google"):
+            try:
+                logger.info(f"[AI Gateway] Executing '{active_model_key}' via '{active_provider_key}' for task '{resolved_task}'")
+                gateway_result = await self.model_router.execute(
+                    model_cfg=resolved_model_cfg,
+                    task=resolved_task,
+                    prompt=edit_prompt if resolved_task == "image_edit" else effective_prompt,
+                    width=req.width or 1024,
+                    height=req.height or 1024,
+                    aspect_ratio=req.aspect_ratio or "1:1",
+                    seed=req.seed or 42,
+                    negative_prompt=req.negative_prompt,
+                    reference_image_url=ref_url,
+                )
+                if gateway_result and gateway_result.image_bytes:
+                    direct_url = await self._upload_to_supabase_storage(gateway_result.image_bytes, file_prefix=f"{active_provider_key}_{active_model_key}")
+                    if not direct_url:
+                        direct_url = await self._save_local_media_fallback(gateway_result.image_bytes, task_id)
+                    if direct_url:
+                        tier_label = f"AI Gateway ({resolved_model_cfg.get('display_name', active_model_key)})"
+                        logger.info(f"[AI Gateway] '{active_model_key}' succeeded in {gateway_result.latency_ms}ms: {direct_url}")
+            except Exception as gw_err:
+                logger.warning(f"[AI Gateway] Paid provider '{active_provider_key}' failed ({gw_err}); falling back to local/free ladder.")
 
         # 2a. Explicit Local Inference Request (only if user explicitly selected local/turbo)
         if requested_model in ("local", "offline", "turbo") and self.local_diffusion and await self.local_diffusion.is_available():
@@ -400,6 +481,35 @@ class GenerationService:
                 logger.info(f"[Cloud Jobs] Persisted generation {task_id} (category: '{assigned_category}') for user {user_id}")
             except Exception as e:
                 logger.debug(f"[Cloud Jobs] Table save skipped or pending migration: {e}")
+
+            try:
+                admin = get_supabase_admin()
+                safe_uid = None if user_id == "00000000-0000-0000-0000-000000000000" else user_id
+                admin.table("ai_usage_logs").insert({
+                    "user_id": safe_uid,
+                    "task_id": task_id,
+                    "provider_key": gateway_result.provider_key if gateway_result else active_provider_key,
+                    "model_key": gateway_result.model_key if gateway_result else active_model_key,
+                    "operation": resolved_task,
+                    "resolution": f"{req.width or 1024}x{req.height or 1024}",
+                    "provider_cost_usd": gateway_result.provider_cost_usd if gateway_result else 0.0,
+                    "credits_charged": cost,
+                    "latency_ms": gateway_result.latency_ms if gateway_result else 0,
+                    "is_fallback_used": is_fallback_used or (gateway_result is None and active_provider_key in ("fal", "openai", "google")),
+                    "status": "completed" if direct_url else "failed",
+                }).execute()
+            except Exception as log_err:
+                logger.debug(f"[Usage Telemetry] ai_usage_logs insert skipped (pending migration 010): {log_err}")
+
+            # 2-phase credit settlement or 100% auto-refund on failure
+            if hasattr(self.wallet_service, "settle_or_refund"):
+                await self.wallet_service.settle_or_refund(
+                    user_id=user_id,
+                    task_id=task_id,
+                    reserved_amount=cost,
+                    actual_cost=cost,
+                    status="completed" if direct_url else "failed",
+                )
 
         return GenerationDispatchResponse(
             task_id=task_id,

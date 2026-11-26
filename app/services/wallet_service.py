@@ -125,6 +125,59 @@ class SupabaseWalletService(IWalletService):
         if not user_id or user_id == "00000000-0000-0000-0000-000000000000":
             return {"total_balance": 500.0, "free_daily_balance": 500.0, "purchased_balance": 0.0}
 
+    async def reserve_credits(
+        self,
+        user_id: str,
+        amount: float,
+        task_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Two-phase atomic credit reservation (Migration 010 RPC) with fallback to deduct_credits."""
+        if not user_id or user_id == "00000000-0000-0000-0000-000000000000":
+            return {"success": True, "reserved": 0.0, "is_dev": True, "remaining_balance": 500.0}
+        try:
+            admin = get_supabase_admin()
+            res = admin.rpc("reserve_user_credits", {
+                "p_user_id": user_id,
+                "p_amount": float(amount),
+                "p_task_id": task_id,
+                "p_idempotency_key": idempotency_key,
+                "p_ttl_seconds": 300,
+            }).execute()
+            if res.data and isinstance(res.data, dict):
+                return res.data
+        except Exception as e:
+            logger.debug(f"[Wallet] reserve_user_credits RPC fallback to deduct_credits: {e}")
+        return await self.deduct_credits(user_id=user_id, amount=amount, task_id=task_id, reason="generation")
+
+    async def settle_or_refund(
+        self,
+        user_id: str,
+        task_id: str,
+        reserved_amount: float,
+        actual_cost: float,
+        status: str,
+    ) -> Dict[str, Any]:
+        """Settles actual cost or refunds 100% on failure (Migration 010 RPC) with fallback."""
+        if not user_id or user_id == "00000000-0000-0000-0000-000000000000":
+            return {"success": True, "refunded": 0.0, "is_dev": True}
+        try:
+            admin = get_supabase_admin()
+            res = admin.rpc("settle_or_refund_credits", {
+                "p_user_id": user_id,
+                "p_task_id": task_id,
+                "p_reserved_amount": float(reserved_amount),
+                "p_actual_cost": float(actual_cost),
+                "p_status": status,
+            }).execute()
+            if res.data and isinstance(res.data, dict):
+                return res.data
+        except Exception as e:
+            logger.debug(f"[Wallet] settle_or_refund_credits RPC fallback: {e}")
+            if status in ("failed", "cancelled", "moderation_rejected"):
+                return await self.refund_credits(user_id=user_id, amount=reserved_amount, task_id=task_id, reason=status)
+        return {"success": True, "refunded": 0.0}
+
         try:
             admin = get_supabase_admin()
             res = admin.table("wallets").select("free_daily_balance, purchased_balance, earned_royalty_balance").eq("user_id", user_id).single().execute()
@@ -142,3 +195,56 @@ class SupabaseWalletService(IWalletService):
             logger.warning(f"[Wallet] Balance fetch notice: {e}")
 
         return {"total_balance": 500.0, "free_daily_balance": 500.0, "purchased_balance": 0.0}
+
+    async def reserve_credits(
+        self,
+        user_id: str,
+        amount: float,
+        task_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Two-phase atomic credit reservation (Migration 010 RPC) with fallback to deduct_credits."""
+        if not user_id or user_id == "00000000-0000-0000-0000-000000000000":
+            return {"success": True, "reserved": 0.0, "is_dev": True, "remaining_balance": 500.0}
+        try:
+            admin = get_supabase_admin()
+            res = admin.rpc("reserve_user_credits", {
+                "p_user_id": user_id,
+                "p_amount": float(amount),
+                "p_task_id": task_id,
+                "p_idempotency_key": idempotency_key,
+                "p_ttl_seconds": 300,
+            }).execute()
+            if res.data and isinstance(res.data, dict):
+                return res.data
+        except Exception as e:
+            logger.debug(f"[Wallet] reserve_user_credits RPC fallback to deduct_credits: {e}")
+        return await self.deduct_credits(user_id=user_id, amount=amount, task_id=task_id, reason="generation")
+
+    async def settle_or_refund(
+        self,
+        user_id: str,
+        task_id: str,
+        reserved_amount: float,
+        actual_cost: float,
+        status: str,
+    ) -> Dict[str, Any]:
+        """Settles actual cost or refunds 100% on failure (Migration 010 RPC) with fallback."""
+        if not user_id or user_id == "00000000-0000-0000-0000-000000000000":
+            return {"success": True, "refunded": 0.0, "is_dev": True}
+        try:
+            admin = get_supabase_admin()
+            res = admin.rpc("settle_or_refund_credits", {
+                "p_user_id": user_id,
+                "p_task_id": task_id,
+                "p_reserved_amount": float(reserved_amount),
+                "p_actual_cost": float(actual_cost),
+                "p_status": status,
+            }).execute()
+            if res.data and isinstance(res.data, dict):
+                return res.data
+        except Exception as e:
+            logger.debug(f"[Wallet] settle_or_refund_credits RPC fallback: {e}")
+            if status in ("failed", "cancelled", "moderation_rejected"):
+                return await self.refund_credits(user_id=user_id, amount=reserved_amount, task_id=task_id, reason=status)
+        return {"success": True, "refunded": 0.0}

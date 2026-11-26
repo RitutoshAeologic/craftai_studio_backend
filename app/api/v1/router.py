@@ -9,6 +9,7 @@ from app.api.v1.endpoints.search import router as search_router
 from app.api.v1.endpoints.remix import router as remix_router
 from app.api.v1.endpoints.library import router as library_router
 from app.api.v1.endpoints.categories import router as categories_router
+from app.api.v1.endpoints.models import router as models_router
 
 api_v1_router = APIRouter()
 
@@ -24,6 +25,7 @@ prompt_engineering_router.include_router(search_router)
 prompt_engineering_router.include_router(remix_router)
 prompt_engineering_router.include_router(library_router)
 prompt_engineering_router.include_router(categories_router)
+prompt_engineering_router.include_router(models_router)
 
 api_v1_router.include_router(prompt_engineering_router)
 
@@ -38,6 +40,7 @@ api_v1_router.include_router(remix_router)
 api_v1_router.include_router(library_router)
 api_v1_router.include_router(prompt_router)
 api_v1_router.include_router(categories_router)
+api_v1_router.include_router(models_router)
 
 
 @api_v1_router.get("/health", tags=["Health"])

@@ -16,7 +16,14 @@ class GenerationDispatchRequest(BaseModel):
     width: Optional[int] = Field(1024, ge=512, le=2048)
     height: Optional[int] = Field(1024, ge=512, le=2048)
     seed: Optional[int] = Field(42, description="RNG Seed for reproducibility")
-    model: Optional[str] = Field("flux", description="Diffusion model: flux, gemini, chatgpt")
+    model: Optional[str] = Field("flux", description="Diffusion model: auto, flux, gemini, chatgpt, or ai_models.model_key")
+    quality: Optional[str] = Field("standard", description="Quality tier: economy, standard, premium")
+    enhance_prompt: bool = Field(False, description="Optional prompt enhancement via OpenRouter/LLM (disabled on curated templates)")
+    enhancePrompt: Optional[bool] = None
+    idempotency_key: Optional[str] = Field(None, description="Client-generated key to prevent duplicate credit deduction")
+    idempotencyKey: Optional[str] = None
+    aspect_ratio: Optional[str] = Field("1:1", description="Requested aspect ratio")
+    aspectRatio: Optional[str] = None
     remixed_from_prompt_id: Optional[str] = Field(None, description="Original explore prompt ID if remixed")
     remixedFromPromptId: Optional[str] = None
     anchor_image_url: Optional[str] = Field(None, description="Anchor image URL for style and composition remixing")
@@ -53,8 +60,16 @@ class GenerationDispatchRequest(BaseModel):
             edit = data.get("edit_instruction") or data.get("editInstruction")
             if edit:
                 data["edit_instruction"] = str(edit)
+            idem = data.get("idempotency_key") or data.get("idempotencyKey")
+            if idem:
+                data["idempotency_key"] = str(idem)
+            enh = data.get("enhance_prompt") if data.get("enhance_prompt") is not None else data.get("enhancePrompt")
+            if enh is not None:
+                data["enhance_prompt"] = bool(enh)
             # Aspect ratio to width/height fallback
             ratio = data.get("aspect_ratio") or data.get("aspectRatio")
+            if ratio:
+                data["aspect_ratio"] = str(ratio)
             if ratio and (not data.get("width") or not data.get("height")):
                 ratio_map = {
                     "1:1": (1024, 1024),

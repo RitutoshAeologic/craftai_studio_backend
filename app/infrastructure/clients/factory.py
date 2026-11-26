@@ -5,6 +5,7 @@ from app.infrastructure.clients.groq_client import GroqClient
 from app.infrastructure.clients.local_llm_client import LocalOfflineLLMClient
 from app.infrastructure.clients.openai_client import OpenAILLMClient
 from app.infrastructure.clients.claude_client import ClaudeLLMClient
+from app.infrastructure.clients.openrouter_client import OpenRouterLLMClient
 from app.core.config import settings
 from app.core.logging import logger
 
@@ -43,6 +44,11 @@ class LLMClientFactory:
         if "claude" in name or "anthropic" in name:
             model = cfg.get("claude_model") or getattr(settings, "CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
             return ClaudeLLMClient(model=model)
+
+        # 5. OpenRouter Unified Text Gateway
+        if "openrouter" in name:
+            model = cfg.get("openrouter_model") or getattr(settings, "OPENROUTER_MODEL", "openai/gpt-4o-mini")
+            return OpenRouterLLMClient(model=model)
 
         # 5. Local Deterministic Offline Engine
         if "local" in name or "offline" in name:
