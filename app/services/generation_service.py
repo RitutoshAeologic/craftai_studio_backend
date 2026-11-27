@@ -1,10 +1,13 @@
 import os
 import re
 import uuid
+import asyncio
 import ipaddress
 from urllib.parse import urlparse
 import httpx
 from typing import List, Dict, Any, Optional
+from app.infrastructure.clients.factory import LLMClientFactory
+from app.services.config_service import ConfigService
 from app.infrastructure.clients.base import IDiffusionGateway, IDiffusionEngine, IVisionClient, IFaceLockEngine, ICloudDiffusionEngine
 from app.infrastructure.clients.diffusion_factory import DiffusionStrategyFactory
 from app.infrastructure.clients.vision_factory import VisionClientFactory
@@ -181,6 +184,34 @@ class GenerationService:
         active_model_key = resolved_model_cfg.get("model_key") or "local_sdxl"
         cost = float(resolved_model_cfg.get("credit_cost") or (3.0 if has_face_lock else 2.0))
 
+        # 1.5 Idempotency Short-Circuit: if this idempotency_key already produced a job, return it immediately
+        if req.idempotency_key and user_id and user_id != "00000000-0000-0000-0000-000000000000":
+            try:
+                admin = get_supabase_admin()
+                existing_res = (
+                    admin.table("jobs")
+                    .select("job_id, status, output_url, image_url, preview_url, model_used, metadata")
+                    .eq("user_id", user_id)
+                    .eq("idempotency_key", req.idempotency_key)
+                    .limit(1)
+                    .execute()
+                )
+                if existing_res.data:
+                    row = existing_res.data[0]
+                    existing_url = row.get("output_url") or row.get("image_url") or row.get("preview_url")
+                    if existing_url:
+                        logger.info(f"[Idempotency] Returning existing job {row.get('job_id')} for key {req.idempotency_key}")
+                        return GenerationDispatchResponse(
+                            task_id=row.get("job_id") or task_id,
+                            tier=f"Cached Idempotent ({row.get('model_used') or active_model_key})",
+                            status="ready",
+                            estimated_seconds=1,
+                            direct_image_url=existing_url,
+                            category=(row.get("metadata") or {}).get("category", "General"),
+                        )
+            except Exception as idem_err:
+                logger.debug(f"[Idempotency] Lookup skipped (pending migration 010): {idem_err}")
+
         # 2. Reserve credits atomically & enforce insufficient-balance rejection
         if user_id:
             if hasattr(self.wallet_service, "reserve_credits"):
@@ -200,7 +231,27 @@ class GenerationService:
             if not wallet_res.get("success", True):
                 raise HTTPException(status_code=402, detail=wallet_res.get("error", "Insufficient credits"))
 
-        effective_prompt = self._optimize_prompt_for_diffusion(req.prompt)
+        raw_dispatch_prompt = req.prompt
+        if req.enhance_prompt and not req.remixed_from_prompt_id and not is_edit_request:
+            try:
+                llm_cfg = ConfigService.get_llm_config()
+                clients = LLMClientFactory().get_fallback_chain(None, llm_cfg)
+                for llm_client in clients:
+                    try:
+                        expanded = await asyncio.wait_for(
+                            llm_client.expand_prompt(raw_dispatch_prompt),
+                            timeout=2.5,
+                        )
+                        if isinstance(expanded, dict) and expanded.get("master_prompt"):
+                            raw_dispatch_prompt = str(expanded["master_prompt"])
+                            logger.info(f"[Enhance-Prompt] Enhanced prompt via {llm_client.__class__.__name__}")
+                            break
+                    except Exception:
+                        continue
+            except Exception as enh_err:
+                logger.warning(f"[Enhance-Prompt] Skipped enhancement ({enh_err}); using raw prompt")
+
+        effective_prompt = self._optimize_prompt_for_diffusion(raw_dispatch_prompt)
 
         # ── 1. Multimodal Facial Identity Conditioning ────────────────────────
         extracted_face_tokens = None
@@ -476,6 +527,9 @@ class GenerationService:
                     "seed": req.seed or 42,
                     "credits_deducted": cost,
                     "is_download_unlocked": False,
+                    "idempotency_key": req.idempotency_key,
+                    "provider_key": active_provider_key,
+                    "model_key": active_model_key,
                     "metadata": req.structured_metadata or {}
                 }).execute()
                 logger.info(f"[Cloud Jobs] Persisted generation {task_id} (category: '{assigned_category}') for user {user_id}")

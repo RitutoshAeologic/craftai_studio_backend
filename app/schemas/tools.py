@@ -1,4 +1,4 @@
-from typing import Optional, Any, List
+from typing import Optional, Any, List, Dict
 from pydantic import BaseModel, Field, model_validator
 
 class ToolPresetRequest(BaseModel):
@@ -209,6 +209,22 @@ class ProductDetailRequest(BaseModel):
     quality: Optional[str] = "1k"
     user_id: Optional[str] = None
     userId: Optional[str] = None
+    layout_template: Optional[Dict[str, Any]] = None
+    layoutTemplate: Optional[Dict[str, Any]] = None
+    export_format: Optional[str] = "png"
+    exportFormat: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_poster_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            lt = data.get("layout_template") or data.get("layoutTemplate")
+            if lt is not None:
+                data["layout_template"] = lt
+            ef = data.get("export_format") or data.get("exportFormat")
+            if ef:
+                data["export_format"] = str(ef).lower().strip()
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -253,6 +269,22 @@ class MarketingPosterRequest(BaseModel):
     quality: Optional[str] = "1k"
     user_id: Optional[str] = None
     userId: Optional[str] = None
+    layout_template: Optional[Dict[str, Any]] = None
+    layoutTemplate: Optional[Dict[str, Any]] = None
+    export_format: Optional[str] = "png"
+    exportFormat: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_poster_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            lt = data.get("layout_template") or data.get("layoutTemplate")
+            if lt is not None:
+                data["layout_template"] = lt
+            ef = data.get("export_format") or data.get("exportFormat")
+            if ef:
+                data["export_format"] = str(ef).lower().strip()
+        return data
 
     @model_validator(mode="before")
     @classmethod

@@ -266,7 +266,28 @@ class ConfigService:
             _MODELS_CACHE = raw_models
             _MODELS_LAST_FETCH = now
 
-        enriched: List[Dict[str, Any]] = []
+        enriched: List[Dict[str, Any]] = [
+            {
+                "model_key": "auto",
+                "provider_key": "craftai",
+                "external_model_id": "auto",
+                "display_name": "Auto (Recommended)",
+                "tasks": ["text_to_image", "image_edit", "face_lock_remix"],
+                "tier": "standard",
+                "credit_cost": 2.0,
+                "fallback_model_key": "local_sdxl",
+                "capabilities": {
+                    "supports_facelock": True,
+                    "supports_negative_prompt": True,
+                    "supports_transparency": False,
+                },
+                "is_active": True,
+                "sort_order": 0,
+                "provider_configured": True,
+                "active_mode": "auto_router",
+                "is_available": True,
+            }
+        ]
         for m in raw_models:
             item = dict(m)
             pk = (item.get("provider_key") or "local").lower()

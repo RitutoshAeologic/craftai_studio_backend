@@ -36,6 +36,8 @@ class GenerationDispatchRequest(BaseModel):
     @classmethod
     def normalize_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            if isinstance(data.get("prompt"), str):
+                data["prompt"] = data["prompt"].strip()
             tid = data.get("task_id") or data.get("taskId")
             if tid:
                 data["task_id"] = str(tid)

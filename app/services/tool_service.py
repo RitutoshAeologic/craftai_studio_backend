@@ -9,7 +9,7 @@ import numpy as np
 import cv2
 from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageOps, ImageFont
 import rembg
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
 from app.infrastructure.clients.base import IDiffusionGateway, IVisionClient
 from app.infrastructure.clients.vision_factory import VisionClientFactory
 from app.infrastructure.clients.huggingface_client import HuggingFaceClient
@@ -1571,11 +1571,33 @@ class ToolService:
         headline: Optional[str] = None,
         subtext: Optional[str] = None,
         discount_badge: Optional[str] = None,
-        theme: Optional[str] = "bold_sale"
+        theme: Optional[str] = "bold_sale",
+        layout_template: Optional[Dict[str, Any]] = None,
+        export_format: str = "png"
     ) -> bytes:
-        canvas_w, canvas_h = 1080, 1350  # 4:5
+        canvas_w = int((layout_template or {}).get("width") or 1080)
+        canvas_h = int((layout_template or {}).get("height") or 1350)
+        canvas_w = max(512, min(canvas_w, 2400))
+        canvas_h = max(512, min(canvas_h, 2400))
         canvas = Image.new("RGBA", (canvas_w, canvas_h), (12, 12, 16, 255))
         brand_accent = (99, 102, 241)
+
+        img_box = (0, 0, canvas_w, canvas_h)
+        if layout_template and isinstance(layout_template.get("elements"), list):
+            for el in layout_template["elements"]:
+                if isinstance(el, dict) and el.get("type") == "image":
+                    nx = float(el.get("x", 0.0))
+                    ny = float(el.get("y", 0.0))
+                    nw = float(el.get("w", 1.0))
+                    nh = float(el.get("h", 1.0))
+                    if 0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0 and 0.0 < nw <= 1.0 and 0.0 < nh <= 1.0:
+                        img_box = (
+                            int(nx * canvas_w),
+                            int(ny * canvas_h),
+                            max(64, int(nw * canvas_w)),
+                            max(64, int(nh * canvas_h)),
+                        )
+                    break
 
         if input_bytes:
             hero = Image.open(io.BytesIO(input_bytes)).convert("RGB")
@@ -1584,12 +1606,12 @@ class ToolService:
             if palette:
                 brand_accent = palette[0]
 
-            hero = hero.resize((canvas_w, canvas_h), resample=Image.Resampling.LANCZOS)
+            hero = hero.resize((img_box[2], img_box[3]), resample=Image.Resampling.LANCZOS)
             # Add cinematic dark gradient overlay
             overlay = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
             o_draw = ImageDraw.Draw(overlay)
             o_draw.rectangle([0, int(canvas_h * 0.4), canvas_w, canvas_h], fill=(12, 12, 16, 210))
-            canvas.paste(hero, (0, 0))
+            canvas.paste(hero, (img_box[0], img_box[1]))
             canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay)
 
         # Graphic framing borders tinted with extracted brand accent
@@ -1617,7 +1639,13 @@ class ToolService:
         draw.text((92, canvas_h - 120), display_subtext, font=font_sub, fill=(161, 161, 170, 255))
 
         out_io = io.BytesIO()
-        canvas.convert("RGB").save(out_io, format="JPEG", quality=95, optimize=True)
+        fmt = (export_format or "png").lower().strip()
+        if fmt == "pdf":
+            canvas.convert("RGB").save(out_io, format="PDF", resolution=300.0)
+        elif fmt in ("jpg", "jpeg"):
+            canvas.convert("RGB").save(out_io, format="JPEG", quality=95, optimize=True)
+        else:
+            canvas.convert("RGB").save(out_io, format="PNG", optimize=True)
         return out_io.getvalue()
 
     async def generate_marketing_poster(self, req: MarketingPosterRequest) -> MarketingPosterResponse:
@@ -1638,6 +1666,8 @@ class ToolService:
                 except Exception:
                     pass
 
+            fmt = (req.export_format or "png").lower().strip()
+            ext = "pdf" if fmt == "pdf" else ("jpg" if fmt in ("jpg", "jpeg") else "png")
             output_bytes = await asyncio.to_thread(
                 self._render_marketing_poster,
                 input_bytes,
@@ -1646,13 +1676,16 @@ class ToolService:
                 req.headline,
                 req.subtext,
                 req.discount_badge,
-                req.theme or "bold_sale"
+                req.theme or "bold_sale",
+                req.layout_template,
+                ext,
             )
 
-            output_url = await self._upload_to_supabase(output_bytes, folder="marketing_posters", ext="jpg")
+            output_url = await self._upload_to_supabase(output_bytes, folder="marketing_posters", ext=ext)
             if not output_url:
+                mime = "application/pdf" if ext == "pdf" else f"image/{'jpeg' if ext == 'jpg' else 'png'}"
                 b64_str = base64.b64encode(output_bytes).decode("utf-8")
-                output_url = f"data:image/jpeg;base64,{b64_str}"
+                output_url = f"data:{mime};base64,{b64_str}"
 
             return MarketingPosterResponse(
                 task_id=task_id,

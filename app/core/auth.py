@@ -1,6 +1,7 @@
 import time
 from typing import Optional, Dict, Any
 from fastapi import Header, HTTPException, status
+from app.core.config import settings
 from app.core.supabase_client import get_supabase_admin
 from app.core.logging import logger
 
@@ -24,12 +25,24 @@ async def get_current_user(
         "is_dev": True
     }
 
+    is_prod = getattr(settings, "ENVIRONMENT", "development").strip().lower() == "production"
+
     if not authorization:
+        if is_prod:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+            )
         # Dev fallback when testing from studio without login
         return dev_user
 
     parts = authorization.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
+        if is_prod:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authorization header",
+            )
         return dev_user
 
     token = parts[1]
@@ -55,8 +68,13 @@ async def get_current_user(
             _TOKEN_CACHE[token] = (user_data, now + CACHE_TTL_SECONDS)
             return user_data
     except Exception as e:
-        logger.warning(f"Token verification notice: {e}. Falling back to dev context.")
+        logger.warning(f"Token verification notice: {e}")
 
+    if is_prod:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired authentication token",
+        )
     return dev_user
 
 def invalidate_token(token: str) -> bool:
