@@ -232,7 +232,9 @@ class GenerationService:
                 raise HTTPException(status_code=402, detail=wallet_res.get("error", "Insufficient credits"))
 
         raw_dispatch_prompt = req.prompt
-        if req.enhance_prompt and not req.remixed_from_prompt_id and not is_edit_request:
+        # Skip LLM enhancement if user already supplied a detailed prompt (> 15 words) or curated template
+        is_already_detailed = len(raw_dispatch_prompt.split()) > 15
+        if req.enhance_prompt and not req.remixed_from_prompt_id and not is_edit_request and not is_already_detailed:
             try:
                 llm_cfg = ConfigService.get_llm_config()
                 clients = LLMClientFactory().get_fallback_chain(None, llm_cfg)

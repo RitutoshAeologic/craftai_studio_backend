@@ -151,15 +151,6 @@ class ConfigService:
             "royalty_config": {"is_enabled": False, "royalty_percentage": 40.0},
             "download_cost": 2.0,
             "tier_prices": {"flux": 2.0, "gemini": 3.0, "chatgpt": 3.0},
-            "llm_config": {
-                "provider": getattr(settings, "DEFAULT_LLM_PROVIDER", "gemini"),
-                "fallback_order": ["openrouter", "gemini", "groq", "local"],
-                "gemini_model": getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
-                "groq_model": getattr(settings, "GROQ_MODEL", "qwen/qwen3.8-27b"),
-                "openai_model": getattr(settings, "OPENAI_MODEL", "gpt-4o-mini"),
-                "claude_model": getattr(settings, "CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
-                "openrouter_model": getattr(settings, "OPENROUTER_MODEL", "openai/gpt-4o-mini"),
-            },
         }
 
         try:
@@ -303,9 +294,14 @@ class ConfigService:
     @classmethod
     def get_llm_config(cls) -> Dict[str, Any]:
         settings_map = cls.get_settings()
+        has_openrouter = cls.is_provider_configured("openrouter")
         default_cfg = {
-            "provider": getattr(settings, "DEFAULT_LLM_PROVIDER", "gemini"),
-            "fallback_order": ["openrouter", "gemini", "groq", "local"],
+            "provider": "openrouter" if has_openrouter else getattr(settings, "DEFAULT_LLM_PROVIDER", "gemini"),
+            "fallback_order": (
+                ["openrouter", "gemini", "groq", "local"]
+                if has_openrouter
+                else ["gemini", "groq", "local"]
+            ),
             "gemini_model": getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
             "groq_model": getattr(settings, "GROQ_MODEL", "qwen/qwen3.8-27b"),
             "openai_model": getattr(settings, "OPENAI_MODEL", "gpt-4o-mini"),
